@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Name That Baller 🏀</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="bg-court"></div>
+<div id="toast" class="toast hidden"></div>
+<div id="emoji-layer" aria-hidden="true"></div>
+
+<!-- ── NAME ENTRY ── -->
+<div id="screen-name" class="screen active">
+  <div class="card center-card">
+    <div class="logo">🏀</div>
+    <h1 class="game-title">NAME THAT BALLER</h1>
+    <p class="subtitle">3 Rounds · 45 Questions · Last Name Only</p>
+    <div class="form-group">
+      <input id="input-name" class="text-input" type="text" placeholder="Enter your name…" maxlength="24" autocomplete="off" />
+    </div>
+    <button id="btn-enter" class="btn btn-primary btn-full">Let's Ball →</button>
+  </div>
+</div>
+
+<!-- ── LOBBY ── -->
+<div id="screen-lobby" class="screen">
+  <div class="card center-card">
+    <div class="logo">🏀</div>
+    <h2 class="card-title">READY TO PLAY?</h2>
+    <p class="subtitle">Create a room or join one</p>
+    <button id="btn-create" class="btn btn-primary btn-full">Create Room</button>
+    <div class="divider">OR</div>
+    <div class="form-group join-row">
+      <input id="input-room-code" class="text-input code-input" type="text" placeholder="ROOM CODE" maxlength="5" autocomplete="off" />
+      <button id="btn-join" class="btn btn-secondary">Join</button>
+    </div>
+    <div class="how-to-play">
+      <button class="htp-toggle" onclick="document.getElementById('htp-body').classList.toggle('open')">How to Play ▾</button>
+      <div id="htp-body" class="htp-body">
+        <ul>
+          <li><strong>📸 Round 1 – Hard Ballers:</strong> Name the NBA player from their photo — no easy ones</li>
+          <li><strong>📊 Round 2 – Career Stats:</strong> Name the player from stats only — no photo</li>
+          <li><strong>🔍 Round 3 – Zoom In:</strong> Face first, uniform slowly reveals — faster = more pts</li>
+          <li>⏱ 20 seconds per question · Only last name needed · Close spelling accepted</li>
+          <li>🔥 Build streaks for bonus points</li>
+          <li>🎰 Before the final question each round: place a wager!</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── WAITING ROOM ── -->
+<div id="screen-waiting" class="screen">
+  <div class="card center-card wide-card">
+    <h2 class="card-title">WAITING ROOM</h2>
+    <div class="room-code-block">
+      <span class="room-code-label">Room Code</span>
+      <div class="room-code-row">
+        <span id="room-code-display" class="room-code-big">XXXXX</span>
+        <button class="btn btn-sm btn-outline" onclick="copyRoomCode()">📋 Copy</button>
+      </div>
+      <p class="room-code-hint">Share this code with your friends!</p>
+    </div>
+    <div id="player-list" class="player-list"></div>
+    <button id="btn-start" class="btn btn-primary btn-full" style="display:none">🏀 Start Game</button>
+    <p id="waiting-msg" class="waiting-msg">Waiting for host to start…</p>
+  </div>
+</div>
+
+<!-- ── ROUND INTRO ── -->
+<div id="screen-round-intro" class="screen">
+  <div class="round-intro-content">
+    <div id="ri-icon" class="ri-icon">🏀</div>
+    <div id="ri-round-label" class="ri-round-label">ROUND 1 OF 3</div>
+    <div id="ri-name" class="ri-name">Hard Ballers</div>
+    <div id="ri-desc" class="ri-desc">Name the NBA player from their photo</div>
+    <div id="ri-countdown" class="ri-countdown">Get Ready…</div>
+  </div>
+</div>
+
+<!-- ── BETTING ── -->
+<div id="screen-betting" class="screen">
+  <div class="card center-card wide-card bet-card">
+    <div class="bet-header">
+      <div class="bet-icon">🎰</div>
+      <h2 class="bet-title">DOUBLE DOWN?</h2>
+      <p class="bet-subtitle">Place your bet before the final question of the round</p>
+    </div>
+    <div class="bet-score-row">
+      <span class="bet-score-label">Your current score</span>
+      <span id="bet-my-score" class="bet-score-val">0</span>
+    </div>
+    <div class="bet-input-area">
+      <input type="range" id="bet-slider" min="0" max="100" value="0" class="bet-slider" oninput="updateBetDisplay()" />
+      <div id="bet-amount-display" class="bet-amount-display">0 pts</div>
+      <div class="bet-quick">
+        <button class="btn btn-sm btn-outline" onclick="setBetPct(0.25)">25%</button>
+        <button class="btn btn-sm btn-outline" onclick="setBetPct(0.5)">50%</button>
+        <button class="btn btn-sm btn-outline" onclick="setBetPct(0.75)">75%</button>
+        <button class="btn btn-sm btn-orange" onclick="setBetPct(1)">ALL IN 🔥</button>
+      </div>
+    </div>
+    <button id="btn-lock-bet" class="btn btn-primary btn-full">Lock In Bet →</button>
+    <div id="bet-locked-msg" class="bet-locked-msg" style="display:none">✅ Bet locked in! Waiting for others…</div>
+    <div class="bet-timer-row">
+      <span class="bet-timer-label">Betting closes in</span>
+      <span id="bet-timer-text" class="bet-timer-val">15</span>s
+    </div>
+    <div class="bet-timer-bar-wrap"><div id="bet-timer-bar" class="bet-timer-bar-fill"></div></div>
+    <div id="bet-players-status" class="bet-players-status"></div>
+  </div>
+</div>
+
+<!-- ── QUESTION ── -->
+<div id="screen-question" class="screen">
+  <header class="q-header">
+    <div class="q-meta">
+      <span id="q-round-badge" class="round-badge">R1 📸</span>
+      <span id="q-number" class="q-number">Q1/15</span>
+      <span id="q-bet-badge" class="bet-badge hidden">🎰 BET</span>
+    </div>
+    <div class="timer-wrap">
+      <svg class="timer-svg" viewBox="0 0 100 100">
+        <circle class="timer-bg" cx="50" cy="50" r="40"/>
+        <circle id="timer-circle" class="timer-ring" cx="50" cy="50" r="40"/>
+      </svg>
+      <span id="timer-text" class="timer-text">20</span>
+    </div>
+    <div class="q-right-info">
+      <span id="q-score" class="q-score-val">0</span>
+      <span id="q-streak" class="q-streak" style="display:none">🔥×1</span>
+      <button id="btn-pause" class="btn-pause hidden" onclick="pauseGame()" title="Pause game">⏸</button>
+      <button id="btn-mute" class="btn-mute" onclick="toggleMute()" title="Toggle sound">🔊</button>
+    </div>
+  </header>
+
+  <div id="player-image-container" class="player-image-container"></div>
+
+  <div id="hint-bar" class="hint-bar hidden"><span id="hint-text"></span></div>
+  <div id="answered-bar" class="answered-bar"></div>
+
+  <!-- Answer Input -->
+  <div id="answer-input-wrap" class="answer-input-wrap">
+    <input id="answer-input" class="text-input answer-text-input" type="text"
+           placeholder="Type last name…" maxlength="40" autocomplete="off" spellcheck="false" />
+    <button id="btn-submit-answer" class="btn btn-primary">Submit</button>
+  </div>
+
+  <div id="answer-result-banner" class="answer-result-banner hidden"></div>
+
+  <div class="emoji-toolbar">
+    <span class="emoji-toolbar-label">React:</span>
+    <button class="emoji-btn" onclick="sendEmoji('🔥')">🔥</button>
+    <button class="emoji-btn" onclick="sendEmoji('😱')">😱</button>
+    <button class="emoji-btn" onclick="sendEmoji('💀')">💀</button>
+    <button class="emoji-btn" onclick="sendEmoji('🤣')">🤣</button>
+    <button class="emoji-btn" onclick="sendEmoji('👑')">👑</button>
+    <button class="emoji-btn" onclick="sendEmoji('🐐')">🐐</button>
+  </div>
+</div>
+
+<!-- ── REVEAL ── -->
+<div id="screen-reveal" class="screen">
+  <div class="reveal-layout">
+    <div class="reveal-left">
+      <div id="reveal-image-wrap" class="reveal-image-wrap"></div>
+      <div id="reveal-player-info" class="reveal-player-info"></div>
+      <div id="reveal-fun-fact" class="reveal-fun-fact"></div>
+    </div>
+    <div class="reveal-right">
+      <h3 class="scoreboard-title">SCOREBOARD</h3>
+      <div id="reveal-scoreboard" class="reveal-scoreboard"></div>
+      <div class="reveal-countdown-bar"><div id="reveal-timer-bar" class="reveal-timer-fill"></div></div>
+      <p class="reveal-next-label">Next in <span id="reveal-countdown">20</span>s</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── ROUND END ── -->
+<div id="screen-round-end" class="screen">
+  <div class="card center-card wide-card">
+    <div id="re-round-badge" class="re-round-badge">ROUND 1 COMPLETE</div>
+    <div id="re-mvp" class="re-mvp"></div>
+    <h3 class="scoreboard-title">STANDINGS</h3>
+    <div id="re-standings" class="standings-list"></div>
+    <div id="re-next-label" class="re-next-label"></div>
+  </div>
+</div>
+
+<!-- ── GAME END ── -->
+<div id="screen-game-end" class="screen">
+  <div class="card center-card wide-card game-end-card">
+    <div class="trophy">🏆</div>
+    <h2 class="game-end-title">GAME OVER</h2>
+    <div id="ge-winner" class="ge-winner"></div>
+    <div id="ge-standings" class="standings-list ge-standings"></div>
+    <div id="ge-round-breakdown" class="ge-round-breakdown"></div>
+    <button id="btn-play-again" class="btn btn-primary btn-full" style="display:none">🔄 Play Again</button>
+    <button id="btn-back-lobby" class="btn btn-outline btn-full">← Back to Lobby</button>
+  </div>
+</div>
+
+<!-- ── PAUSE OVERLAY ── -->
+<div id="pause-overlay" class="pause-overlay hidden">
+  <div class="pause-card">
+    <div class="pause-icon">⏸</div>
+    <h2 class="pause-title">GAME PAUSED</h2>
+    <p id="pause-msg" class="pause-msg">Host paused the game</p>
+    <button id="btn-resume" class="btn btn-primary hidden" onclick="resumeGame()">▶ Resume Game</button>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

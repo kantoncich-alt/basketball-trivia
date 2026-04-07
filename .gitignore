@@ -1,0 +1,4 @@
+node_modules/
+image_cache.json
+player_history.json
+.env
