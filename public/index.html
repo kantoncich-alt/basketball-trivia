@@ -3,22 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Name That Baller 🏀</title>
+  <title>Remember That Dude 🏀⚾🏈</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Russo+One&family=Nunito:wght@400;600;700;800;900&family=VT323&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 <div class="bg-court"></div>
 <div id="toast" class="toast hidden"></div>
-<div id="emoji-layer" aria-hidden="true"></div>
 
 <!-- ── NAME ENTRY ── -->
 <div id="screen-name" class="screen active">
   <div class="card center-card">
-    <div class="logo">🏀</div>
-    <h1 class="game-title">NAME THAT BALLER</h1>
-    <p class="subtitle">3 Rounds · 45 Questions · Last Name Only</p>
+    <div class="logo">🏀⚾🏈</div>
+    <h1 class="game-title">REMEMBER THAT DUDE</h1>
+    <p class="subtitle">3 Sports · 45 Questions + Deep Cuts · Last Name Only</p>
     <div class="form-group">
       <input id="input-name" class="text-input" type="text" placeholder="Enter your name…" maxlength="24" autocomplete="off" />
     </div>
@@ -29,7 +28,7 @@
 <!-- ── LOBBY ── -->
 <div id="screen-lobby" class="screen">
   <div class="card center-card">
-    <div class="logo">🏀</div>
+    <div class="logo">🏆</div>
     <h2 class="card-title">READY TO PLAY?</h2>
     <p class="subtitle">Create a room or join one</p>
     <button id="btn-create" class="btn btn-primary btn-full">Create Room</button>
@@ -42,12 +41,15 @@
       <button class="htp-toggle" onclick="document.getElementById('htp-body').classList.toggle('open')">How to Play ▾</button>
       <div id="htp-body" class="htp-body">
         <ul>
-          <li><strong>📸 Round 1 – Hard Ballers:</strong> Name the NBA player from their photo — no easy ones</li>
-          <li><strong>📊 Round 2 – Career Stats:</strong> Name the player from stats only — no photo</li>
-          <li><strong>🔍 Round 3 – Zoom In:</strong> Face first, uniform slowly reveals — faster = more pts</li>
-          <li>⏱ 20 seconds per question · Only last name needed · Close spelling accepted</li>
+          <li><strong>🏀 Round 1 – Hardwood:</strong> Name the NBA player</li>
+          <li><strong>⚾ Round 2 – Diamond:</strong> Name the MLB player</li>
+          <li><strong>🏈 Round 3 – Gridiron:</strong> Name the NFL player</li>
+          <li>⏱ 30 seconds per question · 3 sections of 10s each</li>
+          <li>📖 S1 (0–10s): Career synopsis → <strong>500 pts</strong></li>
+          <li>📊 S2 (10–20s): Teams, stats &amp; accolades → <strong>300 pts</strong></li>
+          <li>📸 S3 (20–30s): Photo + first letters → <strong>150 pts</strong></li>
           <li>🔥 Build streaks for bonus points</li>
-          <li>🎰 Before the final question each round: place a wager!</li>
+          <li>🎰 After each round: Deep Cut bonus with betting!</li>
         </ul>
       </div>
     </div>
@@ -68,7 +70,22 @@
     </div>
     <div id="player-list" class="player-list"></div>
     <button id="btn-start" class="btn btn-primary btn-full" style="display:none">🏀 Start Game</button>
+    <div id="skip-round-row" class="skip-round-row" style="display:none">
+      <span class="skip-round-label">Skip to:</span>
+      <button class="btn btn-sm btn-outline" onclick="startAtRound(2)">R2 ⚾</button>
+      <button class="btn btn-sm btn-outline" onclick="startAtRound(3)">R3 🏈</button>
+      <button class="btn btn-sm btn-outline" onclick="resetHistory()" title="Clear recently seen players">🔀 Reset Pool</button>
+    </div>
     <p id="waiting-msg" class="waiting-msg">Waiting for host to start…</p>
+  </div>
+</div>
+
+<!-- ── LOADING ── -->
+<div id="screen-loading" class="screen">
+  <div class="loading-content">
+    <div class="loading-sports">🏀⚾🏈</div>
+    <div class="loading-text">Building your game…</div>
+    <div class="loading-bar-wrap"><div class="loading-bar-fill"></div></div>
   </div>
 </div>
 
@@ -77,42 +94,14 @@
   <div class="round-intro-content">
     <div id="ri-icon" class="ri-icon">🏀</div>
     <div id="ri-round-label" class="ri-round-label">ROUND 1 OF 3</div>
-    <div id="ri-name" class="ri-name">Hard Ballers</div>
-    <div id="ri-desc" class="ri-desc">Name the NBA player from their photo</div>
+    <div id="ri-name" class="ri-name">HARDWOOD</div>
+    <div id="ri-desc" class="ri-desc">Name the NBA player from clues</div>
+    <div class="ri-scoring">
+      <span class="ri-score-item s1">📖 S1 = 500 pts</span>
+      <span class="ri-score-item s2">📊 S2 = 300 pts</span>
+      <span class="ri-score-item s3">📸 S3 = 150 pts</span>
+    </div>
     <div id="ri-countdown" class="ri-countdown">Get Ready…</div>
-  </div>
-</div>
-
-<!-- ── BETTING ── -->
-<div id="screen-betting" class="screen">
-  <div class="card center-card wide-card bet-card">
-    <div class="bet-header">
-      <div class="bet-icon">🎰</div>
-      <h2 class="bet-title">DOUBLE DOWN?</h2>
-      <p class="bet-subtitle">Place your bet before the final question of the round</p>
-    </div>
-    <div class="bet-score-row">
-      <span class="bet-score-label">Your current score</span>
-      <span id="bet-my-score" class="bet-score-val">0</span>
-    </div>
-    <div class="bet-input-area">
-      <input type="range" id="bet-slider" min="0" max="100" value="0" class="bet-slider" oninput="updateBetDisplay()" />
-      <div id="bet-amount-display" class="bet-amount-display">0 pts</div>
-      <div class="bet-quick">
-        <button class="btn btn-sm btn-outline" onclick="setBetPct(0.25)">25%</button>
-        <button class="btn btn-sm btn-outline" onclick="setBetPct(0.5)">50%</button>
-        <button class="btn btn-sm btn-outline" onclick="setBetPct(0.75)">75%</button>
-        <button class="btn btn-sm btn-orange" onclick="setBetPct(1)">ALL IN 🔥</button>
-      </div>
-    </div>
-    <button id="btn-lock-bet" class="btn btn-primary btn-full">Lock In Bet →</button>
-    <div id="bet-locked-msg" class="bet-locked-msg" style="display:none">✅ Bet locked in! Waiting for others…</div>
-    <div class="bet-timer-row">
-      <span class="bet-timer-label">Betting closes in</span>
-      <span id="bet-timer-text" class="bet-timer-val">15</span>s
-    </div>
-    <div class="bet-timer-bar-wrap"><div id="bet-timer-bar" class="bet-timer-bar-fill"></div></div>
-    <div id="bet-players-status" class="bet-players-status"></div>
   </div>
 </div>
 
@@ -120,47 +109,70 @@
 <div id="screen-question" class="screen">
   <header class="q-header">
     <div class="q-meta">
-      <span id="q-round-badge" class="round-badge">R1 📸</span>
+      <span id="q-round-badge" class="round-badge">R1 🏀</span>
       <span id="q-number" class="q-number">Q1/15</span>
-      <span id="q-bet-badge" class="bet-badge hidden">🎰 BET</span>
     </div>
     <div class="timer-wrap">
       <svg class="timer-svg" viewBox="0 0 100 100">
         <circle class="timer-bg" cx="50" cy="50" r="40"/>
         <circle id="timer-circle" class="timer-ring" cx="50" cy="50" r="40"/>
       </svg>
-      <span id="timer-text" class="timer-text">20</span>
+      <span id="timer-text" class="timer-text">30</span>
     </div>
     <div class="q-right-info">
       <span id="q-score" class="q-score-val">0</span>
       <span id="q-streak" class="q-streak" style="display:none">🔥×1</span>
-      <button id="btn-pause" class="btn-pause hidden" onclick="pauseGame()" title="Pause game">⏸</button>
-      <button id="btn-mute" class="btn-mute" onclick="toggleMute()" title="Toggle sound">🔊</button>
+      <button id="btn-pause" class="btn-pause hidden" onclick="pauseGame()" title="Pause">⏸</button>
+      <button id="btn-mute" class="btn-mute" onclick="toggleMute()" title="Sound">🔊</button>
     </div>
   </header>
 
-  <div id="player-image-container" class="player-image-container"></div>
-
-  <div id="hint-bar" class="hint-bar hidden"><span id="hint-text"></span></div>
-  <div id="answered-bar" class="answered-bar"></div>
-
-  <!-- Answer Input -->
-  <div id="answer-input-wrap" class="answer-input-wrap">
-    <input id="answer-input" class="text-input answer-text-input" type="text"
-           placeholder="Type last name…" maxlength="40" autocomplete="off" spellcheck="false" />
-    <button id="btn-submit-answer" class="btn btn-primary">Submit</button>
+  <!-- Section markers -->
+  <div class="section-markers">
+    <div id="sm-1" class="section-marker active">
+      <span class="sm-label">S1</span>
+      <span class="sm-pts">500</span>
+    </div>
+    <div id="sm-2" class="section-marker">
+      <span class="sm-label">S2</span>
+      <span class="sm-pts">300</span>
+    </div>
+    <div id="sm-3" class="section-marker">
+      <span class="sm-label">S3</span>
+      <span class="sm-pts">150</span>
+    </div>
   </div>
 
-  <div id="answer-result-banner" class="answer-result-banner hidden"></div>
+  <div id="answered-bar" class="answered-bar"></div>
 
-  <div class="emoji-toolbar">
-    <span class="emoji-toolbar-label">React:</span>
-    <button class="emoji-btn" onclick="sendEmoji('🔥')">🔥</button>
-    <button class="emoji-btn" onclick="sendEmoji('😱')">😱</button>
-    <button class="emoji-btn" onclick="sendEmoji('💀')">💀</button>
-    <button class="emoji-btn" onclick="sendEmoji('🤣')">🤣</button>
-    <button class="emoji-btn" onclick="sendEmoji('👑')">👑</button>
-    <button class="emoji-btn" onclick="sendEmoji('🐐')">🐐</button>
+  <div class="question-body">
+    <!-- Section 1: Synopsis -->
+    <div id="section1-wrap" class="section-card section1-card">
+      <div class="section-tag">📖 Clue 1</div>
+      <p id="section1-content" class="synopsis-text"></p>
+    </div>
+
+    <!-- Section 2: Teams / Stats / Hangman (revealed at 10s) -->
+    <div id="section2-wrap" class="section-card section2-card hidden">
+      <div class="section-tag">📊 Clue 2</div>
+      <div id="section2-content"></div>
+    </div>
+
+    <!-- Section 3: Photo (revealed at 20s, image in container below) -->
+    <div id="section3-wrap" class="section-card section3-card hidden">
+      <div class="section-tag">📸 Clue 3</div>
+      <div id="player-image-container" class="player-image-container"></div>
+    </div>
+  </div>
+
+  <!-- Answer Input (sticky) -->
+  <div class="answer-dock">
+    <div id="answer-result-banner" class="answer-result-banner hidden"></div>
+    <div class="answer-input-wrap">
+      <input id="answer-input" class="text-input answer-text-input" type="text"
+             placeholder="TYPE LAST NAME…" maxlength="40" autocomplete="off" spellcheck="false" />
+      <button id="btn-submit-answer" class="btn btn-primary">SUBMIT</button>
+    </div>
   </div>
 </div>
 
@@ -176,7 +188,7 @@
       <h3 class="scoreboard-title">SCOREBOARD</h3>
       <div id="reveal-scoreboard" class="reveal-scoreboard"></div>
       <div class="reveal-countdown-bar"><div id="reveal-timer-bar" class="reveal-timer-fill"></div></div>
-      <p class="reveal-next-label">Next in <span id="reveal-countdown">20</span>s</p>
+      <p class="reveal-next-label">Next in <span id="reveal-countdown">15</span>s</p>
     </div>
   </div>
 </div>
@@ -188,7 +200,95 @@
     <div id="re-mvp" class="re-mvp"></div>
     <h3 class="scoreboard-title">STANDINGS</h3>
     <div id="re-standings" class="standings-list"></div>
-    <div id="re-next-label" class="re-next-label"></div>
+    <div id="re-next-label" class="re-next-label">Deep Cut coming up…</div>
+  </div>
+</div>
+
+<!-- ── DEEP CUT BETTING ── -->
+<div id="screen-deep-cut-betting" class="screen">
+  <div class="card center-card wide-card bet-card">
+    <div class="bet-header">
+      <div class="bet-icon">🎰</div>
+      <h2 id="dc-bet-sport" class="bet-title">DEEP CUT BET</h2>
+      <p class="bet-subtitle">A photo-only question is coming — place your wager!</p>
+    </div>
+    <div class="bet-score-row">
+      <span class="bet-score-label">Your current score</span>
+      <span id="dc-my-score" class="bet-score-val">0</span>
+    </div>
+    <div class="dc-bet-buttons">
+      <button class="dc-bet-btn btn-outline" data-pct="0" onclick="selectDcBet(0)">Pass</button>
+      <button class="dc-bet-btn btn-outline" data-pct="0.05" onclick="selectDcBet(0.05)">5%</button>
+      <button class="dc-bet-btn btn-outline" data-pct="0.10" onclick="selectDcBet(0.10)">10%</button>
+      <button class="dc-bet-btn btn-outline" data-pct="0.15" onclick="selectDcBet(0.15)">15%</button>
+      <button class="dc-bet-btn btn-outline" data-pct="0.20" onclick="selectDcBet(0.20)">20%</button>
+      <button class="dc-bet-btn btn-orange" data-pct="0.25" onclick="selectDcBet(0.25)">25% 🔥</button>
+    </div>
+    <div id="dc-bet-preview" class="dc-bet-preview">No bet selected</div>
+    <button id="btn-lock-dc-bet" class="btn btn-primary btn-full">Lock In →</button>
+    <div id="dc-bet-locked-msg" class="bet-locked-msg" style="display:none">✅ Bet locked! Waiting for others…</div>
+    <div class="bet-timer-row">
+      <span class="bet-timer-label">Closes in</span>
+      <span id="dc-bet-timer" class="bet-timer-val">15</span>s
+    </div>
+    <div class="bet-timer-bar-wrap"><div id="dc-bet-timer-bar" class="bet-timer-bar-fill"></div></div>
+  </div>
+</div>
+
+<!-- ── DEEP CUT QUESTION ── -->
+<div id="screen-deep-cut-question" class="screen">
+  <header class="q-header">
+    <div class="q-meta">
+      <span id="dc-round-badge" class="round-badge deep-cut-badge">DEEP CUT 🎰</span>
+    </div>
+    <div class="timer-wrap">
+      <svg class="timer-svg" viewBox="0 0 100 100">
+        <circle class="timer-bg" cx="50" cy="50" r="40"/>
+        <circle id="dc-timer-circle" class="timer-ring" cx="50" cy="50" r="40"/>
+      </svg>
+      <span id="dc-timer-text" class="timer-text">30</span>
+    </div>
+    <div class="q-right-info">
+      <span id="dc-score-display" class="q-score-val">0</span>
+      <button id="btn-mute-dc" class="btn-mute" onclick="toggleMute()" title="Sound">🔊</button>
+    </div>
+  </header>
+
+  <div id="dc-answered-bar" class="answered-bar"></div>
+
+  <div class="question-body dc-body">
+    <div id="dc-bet-display" class="dc-bet-display" style="display:none"></div>
+    <div class="section-card dc-photo-card">
+      <div class="section-tag">📸 Photo Only — Name That Dude!</div>
+      <div id="dc-image-container" class="player-image-container dc-image-container"></div>
+    </div>
+  </div>
+
+  <div class="answer-dock">
+    <div id="dc-answer-result" class="answer-result-banner hidden"></div>
+    <div class="answer-input-wrap">
+      <input id="dc-answer-input" class="text-input answer-text-input" type="text"
+             placeholder="Type last name…" maxlength="40" autocomplete="off" spellcheck="false" />
+      <button id="btn-dc-submit" class="btn btn-primary">Submit</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── DEEP CUT REVEAL ── -->
+<div id="screen-deep-cut-reveal" class="screen">
+  <div class="reveal-layout">
+    <div class="reveal-left">
+      <div class="deep-cut-reveal-header">🎰 DEEP CUT REVEAL</div>
+      <div id="dcr-image-wrap" class="reveal-image-wrap"></div>
+      <div id="dcr-player-name" class="reveal-player-info reveal-player-name"></div>
+      <div id="dcr-fun-fact" class="reveal-fun-fact"></div>
+    </div>
+    <div class="reveal-right">
+      <h3 class="scoreboard-title">BET RESULTS</h3>
+      <div id="dcr-scoreboard" class="reveal-scoreboard"></div>
+      <div class="reveal-countdown-bar"><div id="dcr-timer-bar" class="reveal-timer-fill"></div></div>
+      <p class="reveal-next-label">Next in <span id="dcr-countdown">15</span>s</p>
+    </div>
   </div>
 </div>
 

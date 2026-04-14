@@ -1,37 +1,127 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const axios = require('axios');
-const NodeCache = require('node-cache');
-const path = require('path');
-const fs = require('fs');
+// server.js — Remember That Dude (Sports Edition)
+// Rounds: Basketball → Baseball → Football, 15 Qs each
+// Each question: 3 × 10s sections (synopsis → stats/teams → photo)
+// After each round: Deep Cut bonus (photo only + betting)
 
-const app = express();
+const express = require('express');
+const http    = require('http');
+const { Server } = require('socket.io');
+const axios   = require('axios');
+const path    = require('path');
+const fs      = require('fs');
+
+const app        = express();
 const httpServer = http.createServer(app);
-const io = new Server(httpServer, { cors: { origin: '*' } });
-const imgCache = new NodeCache({ stdTTL: 86400 });
-const rooms = new Map();
+const io         = new Server(httpServer, { cors: { origin: '*' } });
+const rooms      = new Map();
 
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
 
-// Persist image URLs to disk so Bing is only scraped once per player ever
-const IMAGE_CACHE_FILE = path.join(__dirname, 'image_cache.json');
-function loadImageCacheDisk() {
-  try { return JSON.parse(fs.readFileSync(IMAGE_CACHE_FILE, 'utf8')); } catch { return {}; }
-}
-function saveImageCacheDisk() {
-  const dump = {};
-  imgCache.keys().forEach(k => { const v = imgCache.get(k); if (v) dump[k] = v; });
-  try { fs.writeFileSync(IMAGE_CACHE_FILE, JSON.stringify(dump)); } catch {}
-}
-// Pre-populate in-memory cache from disk on startup
-Object.entries(loadImageCacheDisk()).forEach(([k, v]) => imgCache.set(k, v));
-console.log(`Loaded ${imgCache.keys().length} cached image URLs from disk`);
+// ─────────────────────────────────────────────
+//  Data loading
+// ─────────────────────────────────────────────
+const rawBasketball  = require('./data/round2_career');
+const rawCollege     = require('./data/round3_college');
 
-// Load data
-const hardPlayers = require('./data/round1_nba_hard');
-const careerPlayers = require('./data/round2_career');
-const zoomPlayers = require('./data/round3_zoomin');
+// Build college lookup from round3 data to supplement basketball players
+const nbaCollegeLookup = {};
+rawCollege.forEach(p => { nbaCollegeLookup[p.name] = p.college; });
+
+function adaptBasketball(p) {
+  const accolades = [];
+  if (p.allStars > 0) accolades.push(`${p.allStars}× NBA All-Star`);
+  if (p.rings > 0)    accolades.push(`${p.rings}× NBA Champion`);
+  return {
+    id: p.id, sport: 'basketball', name: p.name, position: p.position,
+    teams: p.teams || [], career: p.career,
+    college: nbaCollegeLookup[p.name] || null,
+    wiki: p.wiki,
+    synopsis: p.hint || '',
+    accolades,
+    stats: { ppg: p.ppg, rpg: p.rpg, apg: p.apg, spg: p.spg, bpg: p.bpg, fgPct: p.fgPct },
+    funFact: p.funFact || '',
+  };
+}
+
+const basketballPlayers = rawBasketball.map(adaptBasketball);
+
+function loadSport(filename) {
+  const fp = path.join(__dirname, 'data', filename);
+  if (!fs.existsSync(fp)) { console.warn(`⚠️  ${filename} not found yet`); return []; }
+  return require(fp);
+}
+const baseballPlayers = loadSport('baseball_players.js');
+const footballPlayers = loadSport('football_players.js');
+
+const ROUNDS = [
+  { sport: 'basketball', label: 'Hardwood',  icon: '🏀', players: basketballPlayers },
+  { sport: 'baseball',   label: 'Diamond',   icon: '⚾', players: baseballPlayers   },
+  { sport: 'football',   label: 'Gridiron',  icon: '🏈', players: footballPlayers   },
+];
+
+function getPool(round) { return ROUNDS[round - 1].players; }
+
+// ─────────────────────────────────────────────
+//  Image URLs — Sports Reference sites
+// ─────────────────────────────────────────────
+const BBREF_VER = '202106291';
+
+function refId(name) {
+  const parts = name.trim().split(/\s+/);
+  while (parts.length > 1 && /^(jr\.?|sr\.?|ii|iii|iv|v)$/i.test(parts[parts.length - 1])) parts.pop();
+  const first = parts[0].toLowerCase().replace(/[^a-z]/g, '');
+  const last  = parts[parts.length - 1].toLowerCase().replace(/[^a-z]/g, '');
+  return last.slice(0, 5) + first.slice(0, 2) + '01';
+}
+
+function refImageUrl(name, sport) {
+  const id = refId(name);
+  if (sport === 'basketball') return `https://www.basketball-reference.com/req/${BBREF_VER}/images/players/${id}.jpg`;
+  if (sport === 'baseball')   return `https://img.baseball-reference.com/headshots/crop/${id}.jpg`;
+  if (sport === 'football')   return `https://www.pro-football-reference.com/req/${BBREF_VER}/images/players/${id}.jpg`;
+  return null;
+}
+
+// Wikipedia fallback when a reference site image 404s
+async function fetchWikiImage(wiki) {
+  try {
+    const { data } = await axios.get('https://en.wikipedia.org/w/api.php', {
+      params: { action: 'query', titles: wiki, prop: 'pageimages', format: 'json', pithumbsize: 1200, redirects: '1' },
+      headers: { 'User-Agent': 'RememberThatDude/1.0' },
+      timeout: 8000,
+    });
+    for (const p of Object.values(data.query?.pages || {})) {
+      if (p.thumbnail?.source) return p.thumbnail.source;
+    }
+  } catch {}
+  return null;
+}
+
+// Resolve a confirmed working image URL for a player (used at game-start for deep cuts)
+async function resolveImageUrl(name, sport, wiki) {
+  const primary = refImageUrl(name, sport);
+  try {
+    const r = await axios.head(primary, {
+      timeout: 4000,
+      headers: { 'User-Agent': 'RememberThatDude/1.0' },
+    });
+    if (r.status === 200) return primary;
+  } catch {}
+  // BBRef 404 — try Wikipedia
+  if (wiki) {
+    const wikiUrl = await fetchWikiImage(wiki);
+    if (wikiUrl) return wikiUrl;
+  }
+  return null;
+}
+
+app.post('/api/image/fallback', async (req, res) => {
+  const { wiki } = req.body || {};
+  if (!wiki) return res.json({ url: null });
+  const url = await fetchWikiImage(wiki);
+  res.json({ url: url || null });
+});
 
 // ─────────────────────────────────────────────
 //  Fuzzy answer matching
@@ -49,253 +139,99 @@ function levenshtein(a, b) {
   return dp[m][n];
 }
 
-function normalizeName(s) {
-  return (s || '').toLowerCase()
-    .replace(/[^a-z]/g, '') // strip everything non-letter
-    .replace(/(jr|sr|ii|iii|iv)$/, '');
+function norm(s) {
+  return (s || '').toLowerCase().replace(/[^a-z]/g, '').replace(/(jr|sr|ii|iii|iv)$/, '');
 }
 
 function isCorrect(guess, playerName) {
   if (!guess || !playerName) return false;
-  const guessNorm = normalizeName(guess);
-  if (!guessNorm) return false;
-
-  // Get last name (skip Jr/Sr/II etc.)
+  const g = norm(guess);
+  if (!g) return false;
   const parts = playerName.trim().split(/\s+/);
-  let lastName = parts[parts.length - 1];
-  if (/^(jr|sr|ii|iii|iv)$/i.test(lastName) && parts.length > 1) {
-    lastName = parts[parts.length - 2];
-  }
-  const lastNorm = normalizeName(lastName);
-  const fullNorm = normalizeName(playerName);
-
-  // Exact match
-  if (guessNorm === lastNorm || guessNorm === fullNorm) return true;
-
-  // Fuzzy threshold: short names allow 1 edit, longer names allow 2-3
-  const threshold = lastNorm.length <= 4 ? 1 : lastNorm.length <= 6 ? 2 : lastNorm.length <= 9 ? 3 : 4;
-  if (levenshtein(guessNorm, lastNorm) <= threshold) return true;
-  // Also check full name (no spaces)
-  if (levenshtein(guessNorm, fullNorm) <= threshold + 1) return true;
-
-  return false;
+  let last = parts[parts.length - 1];
+  if (/^(jr|sr|ii|iii|iv)$/i.test(last) && parts.length > 1) last = parts[parts.length - 2];
+  const lastN = norm(last);
+  const fullN = norm(playerName);
+  if (g === lastN || g === fullN) return true;
+  const threshold = lastN.length <= 5 ? 1 : 2;
+  return levenshtein(g, lastN) <= threshold || levenshtein(g, fullN) <= threshold;
 }
 
 // ─────────────────────────────────────────────
-//  Image fetching — Bing scrape (no key needed) → Wikipedia fallback
+//  Scoring
 // ─────────────────────────────────────────────
-const BING_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept-Language': 'en-US,en;q=0.9'
-};
-
-// Known sports photo agencies — clean in-game action shots, no overlays
-const SPORTS_SITES = ['gettyimages', 'alamy', 'usatsi', 'nbae', 'ap.org',
-                      'si.com', 'imagn', 'shutterstock', 'wireimage', 'sports-reference'];
-const SKIP_SITES   = ['wikipedia', 'wikimedia', 'imdb', 'twitter', 'facebook', 'instagram',
-                      'ebay', 'ebayimg', 'beckett', 'cardboard', 'panini', 'topps',
-                      'pinterest', 'pinimg', 'tumblr', 'reddit', 'comc.com', 'pwcc',
-                      'goldin', 'lelands', 'sportscollect', 'dacardworld', 'blowoutcards',
-                      'fleer', 'skybox', 'donruss', 'upperdeck', 'amazon', 'walmart',
-                      'target.com', 'fanatics', 'nbastore', 'jerseyshoppe', 'yimg',
-                      'ecrater', 'mercari', 'etsy', 'redbubble', 'teepublic'];
-
-function isBadImage(url) {
-  const lower = url.toLowerCase();
-  if (SKIP_SITES.some(s => lower.includes(s))) return true;
-  if (lower.includes('headshot')) return true;
-  if (/ar_16.9|ar_3.2|ar_2.1/.test(lower)) return true;
-  // Must be a real photo format — eliminates icons, SVGs, animated GIFs
-  if (!/\.(jpg|jpeg|png)(\?|$)/i.test(url)) return true;
-  // Skip obvious icon/logo/placeholder paths
-  if (/\/icon|\/logo|placeholder|\/default[-_]|noimage|no[-_]photo|silhouette/i.test(url)) return true;
-  return false;
-}
-
-async function fetchBingScrapedImage(player) {
-  const team = player.team ? player.team.split(' ').slice(-1)[0] : '';
-  // Negative keywords knock out trading cards and labeled graphics at the search level
-  const query = `"${player.name}" ${team} NBA -card -"trading card" -rookie -topps -panini -fleer -skybox -donruss`.trim();
-  try {
-    const { data } = await axios.get('https://www.bing.com/images/search', {
-      params: {
-        q: query,
-        form: 'HDRSC2',
-        qft: '+filterui:photo-photo+filterui:aspect-tall'  // photos only, portrait orientation
-      },
-      headers: BING_HEADERS,
-      timeout: 10000
-    });
-
-    // Bing encodes JSON with HTML entities (&quot; instead of ")
-    // Use murl = original full-res image, not turl = small Bing thumbnail
-    const murls = [...data.matchAll(/&quot;murl&quot;:&quot;(https?:[^&"]+)&quot;/g)]
-      .map(m => m[1])
-      .filter(url => !isBadImage(url));
-
-    if (!murls.length) return null;
-
-    // 1st choice: a sports photo agency image (skip index 0 / knowledge panel)
-    const actionShot = murls.find((url, i) =>
-      i > 0 && SPORTS_SITES.some(s => url.includes(s))
-    );
-    if (actionShot) return actionShot;
-
-    // 2nd choice: any clean image beyond index 0
-    return murls[1] || murls[0] || null;
-
-  } catch (err) {
-    console.error(`Bing scrape error for ${player.name}:`, err.message);
-  }
-  return null;
-}
-
-async function fetchWikipediaImages(wikis) {
-  for (let i = 0; i < wikis.length; i += 50) {
-    const batch = wikis.slice(i, i + 50);
-    try {
-      const { data } = await axios.get('https://en.wikipedia.org/w/api.php', {
-        params: { action: 'query', titles: batch.join('|'), prop: 'pageimages', format: 'json', pithumbsize: 800, redirects: '1' },
-        headers: { 'User-Agent': 'NameThatBaller/2.0 (basketball-trivia-game)' },
-        timeout: 15000
-      });
-      const { pages, redirects = [] } = data.query || {};
-      if (!pages) continue;
-      const map = {};
-      Object.values(pages).forEach(p => {
-        if (p.thumbnail?.source) map[p.title.replace(/ /g, '_')] = p.thumbnail.source;
-      });
-      redirects.forEach(r => {
-        const fk = r.from.replace(/ /g, '_'), tk = r.to.replace(/ /g, '_');
-        if (map[tk]) map[fk] = map[tk];
-      });
-      batch.forEach(t => imgCache.set(t, map[t] || ''));
-    } catch (err) {
-      console.error('Wikipedia image fetch error:', err.message);
-      batch.forEach(t => imgCache.set(t, ''));
-    }
-  }
-}
-
-async function prefetchImages(players) {
-  const wikiToPlayer = {};
-  players.forEach(p => { if (p.wiki) wikiToPlayer[p.wiki] = p; });
-
-  const titles = [...new Set(players.map(p => p.wiki).filter(Boolean))];
-  const uncached = titles.filter(t => imgCache.get(t) === undefined);
-  if (!uncached.length) return;
-
-  console.log(`Fetching ${uncached.length} player images via Bing…`);
-
-  // Bing scrape in small batches with a short delay to avoid rate limiting
-  const wikiNeedingWikipedia = [];
-  const CONCURRENCY = 3;
-  for (let i = 0; i < uncached.length; i += CONCURRENCY) {
-    await Promise.all(uncached.slice(i, i + CONCURRENCY).map(async wiki => {
-      const player = wikiToPlayer[wiki];
-      const url = player ? await fetchBingScrapedImage(player) : null;
-      if (url) {
-        imgCache.set(wiki, url);
-      } else {
-        wikiNeedingWikipedia.push(wiki); // fall back to Wikipedia
-      }
-    }));
-    if (i + CONCURRENCY < uncached.length) await new Promise(r => setTimeout(r, 300));
-  }
-
-  // Wikipedia fallback for any that Bing didn't return
-  if (wikiNeedingWikipedia.length) {
-    console.log(`Falling back to Wikipedia for ${wikiNeedingWikipedia.length} players`);
-    await fetchWikipediaImages(wikiNeedingWikipedia);
-  }
-
-  // Persist newly fetched URLs to disk
-  saveImageCacheDisk();
-}
-
-app.get('/api/image', async (req, res) => {
-  const { wiki } = req.query;
-  if (!wiki) return res.json({ url: null });
-  let url = imgCache.get(wiki);
-  if (url === undefined) {
-    await prefetchImages([{ wiki }]);
-    url = imgCache.get(wiki) || '';
-  }
-  res.json({ url: url || null });
-});
-
-// ─────────────────────────────────────────────
-//  Round definitions
-// ─────────────────────────────────────────────
-const ROUNDS = [
-  { type: 'photo',  name: 'Hard Ballers',  desc: 'Name the NBA player from their photo — these aren\'t the easy ones',       icon: '📸' },
-  { type: 'stats',  name: 'Career Stats',  desc: 'Name the player from career statistics only — no photo',                    icon: '📊' },
-  { type: 'zoomin', name: 'Face Time',     desc: 'Face first — name the player before the uniform is revealed for fewer points', icon: '👤' }
-];
-
-function getPool(round) {
-  return [hardPlayers, careerPlayers, zoomPlayers][round - 1];
+function calcScore(elapsedSec, streak) {
+  const base = elapsedSec < 10 ? 500 : elapsedSec < 20 ? 300 : 150;
+  const bonus = streak >= 10 ? 300 : streak >= 7 ? 200 : streak >= 5 ? 100 : streak >= 3 ? 50 : 0;
+  return base + bonus;
 }
 
 // ─────────────────────────────────────────────
-//  Player history — avoids repeats across sessions
+//  Player history — permanent, global across all sports
 // ─────────────────────────────────────────────
 const HISTORY_FILE = path.join(__dirname, 'player_history.json');
 
 function loadHistory() {
   try { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')); }
-  catch { return { r1: [], r2: [], r3: [] }; }
+  catch { return { used: [] }; }
+}
+function saveHistory(h) {
+  try { fs.writeFileSync(HISTORY_FILE, JSON.stringify(h)); } catch {}
 }
 
-function saveHistory(history) {
-  try { fs.writeFileSync(HISTORY_FILE, JSON.stringify(history)); }
-  catch (err) { console.error('Failed to save player history:', err.message); }
-}
+app.post('/api/reset-history', (req, res) => {
+  try { fs.writeFileSync(HISTORY_FILE, JSON.stringify({ used: [] })); } catch {}
+  res.json({ ok: true });
+});
 
-function buildQuestions(round, count = 15, usedNames = new Set(), recentHistory = new Set()) {
-  const pool = getPool(round);
-  let candidates = [...pool]
-    .sort(() => Math.random() - 0.5)
-    .filter(p => !usedNames.has(p.name));
-
-  if (round !== 2) {
-    candidates = candidates.filter(p => {
-      const url = imgCache.get(p.wiki);
-      return url && url.length > 0;
-    });
-  }
-
-  // Prefer players not seen in recent sessions
-  const fresh = candidates.filter(p => !recentHistory.has(p.name));
-  const source = fresh.length >= count ? fresh : candidates;
-  if (fresh.length < count && candidates.length >= count) {
-    console.log(`Round ${round}: pool cycling — only ${fresh.length} fresh players, reusing some`);
-  }
-  return source.slice(0, Math.min(count, source.length));
-}
-
-function calcScore(round, elapsedSec, streak) {
-  let base;
-  if (round === 1) {
-    // Before hint (first 10s) = bonus
-    base = elapsedSec < 10 ? 700 : 500;
-  } else if (round === 3) {
-    // Face-only phase (first 10s) = higher points
-    base = elapsedSec < 10 ? 1000 : 500;
-  } else {
-    // Round 2: flat
-    base = 500;
-  }
-  let streakBonus = 0;
-  if (streak >= 10) streakBonus = 500;
-  else if (streak >= 7)  streakBonus = 300;
-  else if (streak >= 5)  streakBonus = 200;
-  else if (streak >= 3)  streakBonus = 100;
-  return base + streakBonus;
+// ─────────────────────────────────────────────
+//  Nickname stripping — remove giveaway nickname references from clues
+// ─────────────────────────────────────────────
+function stripNicknames(text) {
+  if (!text) return text;
+  const qq = '(?:"[^"]*"|\'[^\']*\')';  // quoted string: "X" or 'X'
+  let s = text;
+  // "nicknamed 'X'" / "was nicknamed 'X'"
+  s = s.replace(new RegExp('\\s*(?:was\\s+)?nicknamed\\s+' + qq, 'g'), '');
+  // "known as 'X'" (only quoted — proper nickname, not "known as one of...")
+  s = s.replace(new RegExp('\\s*(?:was\\s+)?known as\\s+' + qq, 'g'), '');
+  // "earning/earned [him] the nickname 'X'"
+  s = s.replace(new RegExp(',?\\s*earn(?:ing|ed)\\s+(?:him\\s+)?the\\s+nickname\\s+' + qq, 'g'), '');
+  // Clean up artifacts: double spaces, orphaned em dashes at end
+  s = s.replace(/\s{2,}/g, ' ').replace(/\s*—\s*$/, '').trim();
+  return s;
 }
 
 // ─────────────────────────────────────────────
-//  Helpers
+//  Synopsis truncation — keep to ~2 sentences / 220 chars
+// ─────────────────────────────────────────────
+function truncateSynopsis(text) {
+  if (!text) return '';
+  const sentences = text.match(/[^.!?]*[.!?]+/g) || [];
+  if (sentences.length <= 2) return text.trim();
+  return (sentences[0] + sentences[1]).trim();
+}
+
+// ─────────────────────────────────────────────
+//  Question building
+// ─────────────────────────────────────────────
+function buildQuestions(pool, count, usedInGame, usedEverSet) {
+  const fresh = pool
+    .filter(p => !usedEverSet.has(p.name) && !usedInGame.has(p.name))
+    .sort(() => Math.random() - 0.5);
+  const selected = fresh.slice(0, count);
+  if (selected.length < count) {
+    // Pool exhausted — reuse least-recently-used (excluding current game picks)
+    const seen = pool
+      .filter(p => !usedInGame.has(p.name) && !fresh.some(f => f.name === p.name))
+      .sort(() => Math.random() - 0.5);
+    selected.push(...seen.slice(0, count - selected.length));
+  }
+  return selected.slice(0, count);
+}
+
+// ─────────────────────────────────────────────
+//  Room helpers
 // ─────────────────────────────────────────────
 function generateCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -303,292 +239,92 @@ function generateCode() {
   for (let i = 0; i < 5; i++) c += chars[Math.floor(Math.random() * chars.length)];
   return c;
 }
-const AVATARS = ['🏀','⛹️','🏆','🎯','🔥','⚡','🦁','🐯','🦅','🎱','👑','💪','🎰','🎳','🃏'];
-function rndAvatar() { return AVATARS[Math.floor(Math.random() * AVATARS.length)]; }
 
-function makePlayer(socketId, name, isHost) {
-  return { id: socketId, name: name.slice(0, 24), score: 0, streak: 0, roundScores: [0,0,0], isHost, avatar: rndAvatar() };
+function makePlayer(id, name, isHost) {
+  return { id, name, isHost, score: 0, roundScores: [0, 0, 0], streak: 0 };
 }
 
 function makeRoom(code) {
   return {
     code, status: 'lobby',
-    players: new Map(), round: 0, questionIdx: 0,
-    questions: [], allQuestions: {},
-    answers: new Map(), questionStart: null, phaseStart: null,
-    bets: new Map(), bettingActive: false,
-    timer: null,
-    paused: false, pauseRemaining: 0, pausedAt: null
+    players: new Map(),
+    round: 0, questionIdx: 0,
+    questions: {},   // { 1: [...15], 2: [...15], 3: [...15] }
+    deepCuts: {},    // { 1: player, 2: player, 3: player }
+    answers: new Map(),
+    bets: new Map(),
+    bettingActive: false,
+    timer: null, phaseStart: 0, questionStart: 0,
+    paused: false, pauseRemaining: 0,
   };
 }
 
-function getRoom(socket) { return rooms.get(socket.data.roomCode); }
+function getRoom(socket) {
+  return rooms.get(socket.data?.roomCode);
+}
 
 function broadcastLobby(code) {
   const room = rooms.get(code);
   if (!room) return;
-  io.to(code).emit('lobby_update', {
-    players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, isHost: p.isHost, avatar: p.avatar })),
-    roomCode: code
-  });
+  const players = [...room.players.values()].map(p => ({ id: p.id, name: p.name, isHost: p.isHost }));
+  io.to(code).emit('lobby_update', { players, roomCode: code });
 }
 
 // ─────────────────────────────────────────────
-//  Socket.io
-// ─────────────────────────────────────────────
-io.on('connection', socket => {
-  console.log('Connected:', socket.id);
-
-  socket.on('create_room', ({ playerName }) => {
-    let code;
-    let tries = 0;
-    do { code = generateCode(); tries++; } while (rooms.has(code) && tries < 30);
-    const room = makeRoom(code);
-    room.players.set(socket.id, makePlayer(socket.id, playerName, true));
-    rooms.set(code, room);
-    socket.join(code);
-    socket.data.roomCode = code;
-    socket.emit('room_created', { roomCode: code });
-    broadcastLobby(code);
-  });
-
-  socket.on('join_room', ({ playerName, roomCode }) => {
-    const code = (roomCode || '').toUpperCase().trim();
-    const room = rooms.get(code);
-    if (!room)                  return socket.emit('error', { message: 'Room not found. Check your code!' });
-    if (room.status !== 'lobby') return socket.emit('error', { message: 'Game is already in progress.' });
-    if (room.players.size >= 12) return socket.emit('error', { message: 'Room is full (max 12).' });
-    room.players.set(socket.id, makePlayer(socket.id, playerName, false));
-    socket.join(code);
-    socket.data.roomCode = code;
-    socket.emit('room_joined', { roomCode: code });
-    broadcastLobby(code);
-  });
-
-  socket.on('start_game', async () => {
-    const room = getRoom(socket);
-    if (!room || room.status !== 'lobby') return;
-    if (!room.players.get(socket.id)?.isHost) return;
-    room.status = 'loading';
-    io.to(room.code).emit('game_loading', {});
-    // Prefetch images for photo rounds first, then filter questions by availability
-    await prefetchImages([...hardPlayers, ...zoomPlayers]).catch(() => {});
-    const history = loadHistory();
-    const usedNames = new Set();
-    for (let r = 1; r <= 3; r++) {
-      const recentHistory = new Set(history['r' + r] || []);
-      room.allQuestions[r] = buildQuestions(r, 15, usedNames, recentHistory);
-      room.allQuestions[r].forEach(q => {
-        usedNames.add(q.name);
-        history['r' + r] = (history['r' + r] || []).concat(q.name);
-      });
-    }
-    // Trim each round's history to pool.length - 15 so there are always fresh players next game
-    [hardPlayers, careerPlayers, zoomPlayers].forEach((pool, i) => {
-      const key = 'r' + (i + 1);
-      const keep = Math.max(0, pool.length - 15);
-      history[key] = (history[key] || []).slice(-keep);
-    });
-    saveHistory(history);
-    startRound(room.code, 1);
-  });
-
-  socket.on('submit_answer', ({ answer }) => {
-    const room = getRoom(socket);
-    if (!room || room.status !== 'question') return;
-    if (room.answers.has(socket.id)) return; // already answered
-
-    const q = room.questions[room.questionIdx];
-    const elapsed = (Date.now() - room.questionStart) / 1000;
-    const correct = isCorrect(answer, q.name);
-
-    room.answers.set(socket.id, { answer: answer?.slice(0, 60), elapsed, correct });
-
-    // Private immediate feedback to this player
-    socket.emit('answer_feedback', { correct, answer, correctAnswer: correct ? q.name : null });
-
-    // Public: show that someone answered (not who or what)
-    io.to(room.code).emit('player_answered', {
-      answeredCount: room.answers.size,
-      totalPlayers: room.players.size
-    });
-
-    // If everyone answered, reveal immediately
-    if (room.answers.size >= room.players.size) {
-      clearTimeout(room.timer);
-      doReveal(room.code);
-    }
-  });
-
-  socket.on('submit_bet', ({ amount }) => {
-    const room = getRoom(socket);
-    if (!room || !room.bettingActive) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    const bet = Math.max(0, Math.min(Number(amount) || 0, player.score));
-    room.bets.set(socket.id, bet);
-    socket.emit('bet_confirmed', { amount: bet });
-
-    // When all players have bet, start Q15 early
-    if (room.bets.size >= room.players.size) {
-      clearTimeout(room.timer);
-      room.bettingActive = false;
-      room.bets.set('_done', true); // sentinel so betting doesn't re-trigger
-      io.to(room.code).emit('betting_end', {});
-      startQuestion(room.code);
-    }
-  });
-
-  socket.on('pause_game', () => {
-    const room = getRoom(socket);
-    if (!room || room.paused) return;
-    if (!room.players.get(socket.id)?.isHost) return;
-    if (!['question', 'reveal'].includes(room.status)) return;
-
-    clearTimeout(room.timer);
-    const elapsed = Date.now() - room.phaseStart;
-    room.pauseRemaining = Math.max(1000, 20000 - elapsed);
-    room.paused = true;
-    room.pausedAt = Date.now();
-
-    io.to(room.code).emit('game_paused', {
-      remainingSeconds: Math.ceil(room.pauseRemaining / 1000)
-    });
-  });
-
-  socket.on('resume_game', () => {
-    const room = getRoom(socket);
-    if (!room || !room.paused) return;
-    if (!room.players.get(socket.id)?.isHost) return;
-
-    const pauseDuration = Date.now() - room.pausedAt;
-    room.paused = false;
-    room.pausedAt = null;
-
-    // Shift questionStart forward so scoring doesn't count paused time
-    if (room.status === 'question') room.questionStart += pauseDuration;
-    room.phaseStart += pauseDuration;
-
-    const remaining = room.pauseRemaining;
-    const remainingSeconds = Math.ceil(remaining / 1000);
-
-    if (room.status === 'question') {
-      room.timer = setTimeout(() => doReveal(room.code), remaining);
-    } else {
-      room.timer = setTimeout(() => {
-        room.questionIdx++;
-        if (room.questionIdx >= room.questions.length) doRoundEnd(room.code);
-        else startQuestion(room.code);
-      }, remaining);
-    }
-
-    io.to(room.code).emit('game_resumed', { remainingSeconds });
-  });
-
-  socket.on('emoji_react', ({ emoji }) => {
-    const room = getRoom(socket);
-    if (!room) return;
-    const p = room.players.get(socket.id);
-    if (!p) return;
-    io.to(room.code).emit('emoji_reaction', { emoji, playerName: p.name, id: socket.id });
-  });
-
-  socket.on('play_again', () => {
-    const room = getRoom(socket);
-    if (!room || room.status !== 'game_end') return;
-    if (!room.players.get(socket.id)?.isHost) return;
-    room.players.forEach(p => { p.score = 0; p.streak = 0; p.roundScores = [0,0,0]; });
-    room.status = 'lobby';
-    broadcastLobby(room.code);
-  });
-
-  socket.on('disconnect', () => {
-    const code = socket.data.roomCode;
-    if (!code) return;
-    const room = rooms.get(code);
-    if (!room) return;
-    room.players.delete(socket.id);
-    if (room.players.size === 0) { clearTimeout(room.timer); rooms.delete(code); return; }
-    if (![...room.players.values()].some(p => p.isHost))
-      [...room.players.values()][0].isHost = true;
-    if (room.status === 'lobby') broadcastLobby(code);
-    else io.to(code).emit('player_left', { playerId: socket.id });
-  });
-});
-
-// ─────────────────────────────────────────────
-//  Game loop
+//  Game flow
 // ─────────────────────────────────────────────
 function startRound(code, round) {
   const room = rooms.get(code);
   if (!room) return;
-  clearTimeout(room.timer);
   room.round = round;
   room.questionIdx = 0;
-  room.questions = room.allQuestions[round];
   room.status = 'round_intro';
+  clearTimeout(room.timer);
 
-  const info = ROUNDS[round - 1];
-  io.to(code).emit('round_intro', { round, total: 3, ...info });
-  room.timer = setTimeout(() => startQuestion(code), 6000);
+  const { sport, label, icon } = ROUNDS[round - 1];
+  io.to(code).emit('round_intro', { round, totalRounds: 3, sport, label, icon });
+  room.timer = setTimeout(() => startQuestion(code), 5000);
+}
+
+function questionPayload(room) {
+  const q = room.questions[room.round][room.questionIdx];
+  const sport = ROUNDS[room.round - 1].sport;
+  const nameParts = q.name.trim().split(/\s+/).filter(w => !/^(jr\.?|sr\.?|ii|iii|iv)$/i.test(w));
+  return {
+    questionNumber: room.questionIdx + 1,
+    totalQuestions: 15,
+    round: room.round,
+    sport,
+    isDeepCut: false,
+    // Section 1 — visible immediately
+    synopsis: truncateSynopsis(stripNicknames(q.synopsis || '')),
+    // Section 2 — revealed at 10s
+    nameLengths: nameParts.map(w => w.replace(/\./g, '').length),
+    teams: q.teams || [],
+    college: q.college || null,
+    accolades: q.accolades || [],
+    stats: q.stats || {},
+    position: q.position || '',
+    career: q.career || '',
+    // Section 3 — revealed at 20s
+    imageUrl: q._imageUrl || refImageUrl(q.name, sport),
+    wikiTitle: q.wiki || null,
+    nameFirstLetters: nameParts.map(w => w[0].toUpperCase()),
+  };
 }
 
 function startQuestion(code) {
   const room = rooms.get(code);
   if (!room) return;
+  if (room.questionIdx >= 15) { doRoundEnd(code); return; }
 
-  // Check if this is Q15 — trigger betting first (unless already in betting flow)
-  if (room.questionIdx === 14 && !room.bettingActive && !room.bets.has('_done')) {
-    room.bettingActive = true;
-    room.bets = new Map();
-
-    const scores = {};
-    room.players.forEach((p, id) => { scores[id] = p.score; });
-    io.to(code).emit('betting_start', { scores, timeLimit: 15 });
-
-    room.timer = setTimeout(() => {
-      room.bettingActive = false;
-      room.bets.set('_done', true); // sentinel to skip this branch on retry
-      io.to(code).emit('betting_end', {});
-      startQuestion(code);
-    }, 15000);
-    return;
-  }
-
-  // Clear sentinel if present
-  room.bets.delete('_done');
-
-  const q = room.questions[room.questionIdx];
   room.status = 'question';
   room.answers = new Map();
   room.questionStart = Date.now();
   room.phaseStart = Date.now();
 
-  const roundType = ROUNDS[room.round - 1].type;
-  const imageUrl = q.wiki ? (imgCache.get(q.wiki) || null) : null;
-
-  const payload = {
-    questionNumber: room.questionIdx + 1,
-    totalQuestions: room.questions.length,
-    round: room.round,
-    roundType,
-    id: q.id,
-    imageUrl,
-    wikiTitle: q.wiki || null,
-    hint: roundType === 'photo' ? (q.hint || null) : null, // hints only in R1
-    hintRevealTime: roundType === 'photo' ? 10 : 0,        // R1: hint hidden for first 10s
-    faceRevealTime: roundType === 'zoomin' ? 10 : 0,       // R3: face → uniform at 10s
-    isBetQuestion: room.questionIdx === 14,
-    // Career stats data (round 2 only)
-    statsData: roundType === 'stats' ? {
-      position: q.position, height: q.height, draftYear: q.draftYear,
-      career: q.career, allStars: q.allStars, rings: q.rings,
-      ppg: q.ppg, rpg: q.rpg, apg: q.apg, spg: q.spg, bpg: q.bpg, fgPct: q.fgPct
-    } : null
-  };
-
-  io.to(code).emit('question_start', payload);
-  room.timer = setTimeout(() => doReveal(code), 20000);
+  io.to(code).emit('question_start', questionPayload(room));
+  room.timer = setTimeout(() => doReveal(code), 30000); // 3 × 10s
 }
 
 function doReveal(code) {
@@ -597,44 +333,28 @@ function doReveal(code) {
   room.status = 'reveal';
   room.phaseStart = Date.now();
 
-  const q = room.questions[room.questionIdx];
-  const isBetQuestion = room.questionIdx === 14;
-  const imageUrl = q.wiki ? (imgCache.get(q.wiki) || null) : null;
-
+  const q = room.questions[room.round][room.questionIdx];
+  const sport = ROUNDS[room.round - 1].sport;
   const playerResults = [];
+
   room.players.forEach((player, id) => {
     const ans = room.answers.get(id);
-    let correct = ans ? ans.correct : false;
-    let betApplied = 0;
-
-    let points = correct ? calcScore(room.round, ans.elapsed, player.streak + 1) : 0;
-
-    if (correct) player.streak++;
-    else player.streak = 0;
-
-    // Apply bet for Q15
-    if (isBetQuestion) {
-      const bet = room.bets.get(id) || 0;
-      if (bet > 0) {
-        betApplied = correct ? bet : -bet;
-        points += betApplied;
-        player.score = Math.max(0, player.score + points);
-      } else {
-        player.score = Math.max(0, player.score + points);
-      }
+    let points = 0;
+    if (ans?.correct) {
+      player.streak++;
+      points = calcScore(ans.elapsed, player.streak);
     } else {
-      player.score = Math.max(0, player.score + points);
+      player.streak = 0;
     }
+    player.score = Math.max(0, player.score + points);
     player.roundScores[room.round - 1] += points;
-
     playerResults.push({
-      id, name: player.name, avatar: player.avatar,
+      id, name: player.name,
       answer: ans?.answer || null,
-      correct, points,
-      betApplied: isBetQuestion ? betApplied : null,
-      totalScore: player.score,
-      streak: player.streak,
-      elapsed: ans ? Math.round(ans.elapsed * 10) / 10 : null
+      correct: ans?.correct || false,
+      points, totalScore: player.score, streak: player.streak,
+      elapsed: ans ? Math.round(ans.elapsed * 10) / 10 : null,
+      section: ans ? (ans.elapsed < 10 ? 1 : ans.elapsed < 20 ? 2 : 3) : null,
     });
   });
 
@@ -642,19 +362,17 @@ function doReveal(code) {
 
   io.to(code).emit('answer_reveal', {
     correctAnswer: q.name,
-    team: q.team || null,
-    years: q.years || null,
-    funFact: q.funFact,
-    imageUrl,
-    isBetQuestion,
-    playerResults
+    funFact: q.funFact || '',
+    imageUrl: q._imageUrl || refImageUrl(q.name, sport),
+    wikiTitle: q.wiki || null,
+    playerResults,
   });
 
   room.timer = setTimeout(() => {
     room.questionIdx++;
-    if (room.questionIdx >= room.questions.length) doRoundEnd(code);
+    if (room.questionIdx >= 15) doRoundEnd(code);
     else startQuestion(code);
-  }, 20000);
+  }, 15000);
 }
 
 function doRoundEnd(code) {
@@ -663,20 +381,107 @@ function doRoundEnd(code) {
   room.status = 'round_end';
 
   const standings = [...room.players.values()]
-    .map(p => ({ id: p.id, name: p.name, avatar: p.avatar, score: p.score, roundScore: p.roundScores[room.round - 1] }))
+    .map(p => ({ id: p.id, name: p.name, score: p.score, roundScore: p.roundScores[room.round - 1] }))
     .sort((a, b) => b.score - a.score);
 
   const mvp = standings.reduce((best, p) => (!best || p.roundScore > best.roundScore) ? p : best, null);
 
   io.to(code).emit('round_end', {
-    round: room.round, roundName: ROUNDS[room.round - 1].name, standings,
-    mvp: mvp?.name, nextRound: room.round < 3 ? room.round + 1 : null
+    round: room.round, sport: ROUNDS[room.round - 1].sport,
+    label: ROUNDS[room.round - 1].label, standings, mvp: mvp?.name,
+  });
+
+  room.timer = setTimeout(() => startDeepCutBetting(code), 8000);
+}
+
+function startDeepCutBetting(code) {
+  const room = rooms.get(code);
+  if (!room) return;
+
+  const dc = room.deepCuts[room.round];
+  if (!dc) { advanceRound(code); return; }
+
+  room.status = 'deep_cut_betting';
+  room.bets = new Map();
+  room.bettingActive = true;
+
+  const scores = {};
+  room.players.forEach((p, id) => { scores[id] = p.score; });
+
+  io.to(code).emit('deep_cut_betting', {
+    round: room.round,
+    sport: ROUNDS[room.round - 1].sport,
+    scores,
   });
 
   room.timer = setTimeout(() => {
-    if (room.round < 3) startRound(code, room.round + 1);
-    else doGameEnd(code);
-  }, room.round < 3 ? 10000 : 3000);
+    room.bettingActive = false;
+    io.to(code).emit('betting_end', {});
+    startDeepCutQuestion(code);
+  }, 15000);
+}
+
+function startDeepCutQuestion(code) {
+  const room = rooms.get(code);
+  if (!room) return;
+
+  const dc = room.deepCuts[room.round];
+  const sport = ROUNDS[room.round - 1].sport;
+
+  room.status = 'deep_cut_question';
+  room.answers = new Map();
+  room.questionStart = Date.now();
+
+  io.to(code).emit('deep_cut_start', {
+    round: room.round, sport,
+    imageUrl: dc._imageUrl || refImageUrl(dc.name, sport),
+    wikiTitle: dc.wiki || null,
+  });
+
+  room.timer = setTimeout(() => doDeepCutReveal(code), 30000);
+}
+
+function doDeepCutReveal(code) {
+  const room = rooms.get(code);
+  if (!room) return;
+  room.status = 'deep_cut_reveal';
+
+  const dc = room.deepCuts[room.round];
+  const sport = ROUNDS[room.round - 1].sport;
+  const playerResults = [];
+
+  room.players.forEach((player, id) => {
+    const ans = room.answers.get(id);
+    const correct = ans?.correct || false;
+    const bet = room.bets.get(id) || 0;
+    const betChange = bet > 0 ? (correct ? bet : -bet) : 0;
+    player.score = Math.max(0, player.score + betChange);
+
+    playerResults.push({
+      id, name: player.name,
+      answer: ans?.answer || null,
+      correct, betChange, totalScore: player.score,
+    });
+  });
+
+  playerResults.sort((a, b) => b.totalScore - a.totalScore);
+
+  io.to(code).emit('deep_cut_reveal', {
+    correctAnswer: dc.name,
+    funFact: dc.funFact || '',
+    imageUrl: dc._imageUrl || refImageUrl(dc.name, sport),
+    wikiTitle: dc.wiki || null,
+    playerResults,
+  });
+
+  room.timer = setTimeout(() => advanceRound(code), 15000);
+}
+
+function advanceRound(code) {
+  const room = rooms.get(code);
+  if (!room) return;
+  if (room.round < 3) startRound(code, room.round + 1);
+  else doGameEnd(code);
 }
 
 function doGameEnd(code) {
@@ -685,12 +490,237 @@ function doGameEnd(code) {
   room.status = 'game_end';
 
   const standings = [...room.players.values()]
-    .map(p => ({ id: p.id, name: p.name, avatar: p.avatar, totalScore: p.score, roundScores: p.roundScores }))
+    .map(p => ({ id: p.id, name: p.name, totalScore: p.score, roundScores: p.roundScores }))
     .sort((a, b) => b.totalScore - a.totalScore);
 
   io.to(code).emit('game_end', { standings });
   room.timer = setTimeout(() => rooms.delete(code), 30 * 60 * 1000);
 }
 
+// ─────────────────────────────────────────────
+//  Socket handlers
+// ─────────────────────────────────────────────
+io.on('connection', socket => {
+  socket.on('create_room', ({ playerName }) => {
+    if (!playerName?.trim()) return;
+    let code;
+    do { code = generateCode(); } while (rooms.has(code));
+    const room = makeRoom(code);
+    room.players.set(socket.id, makePlayer(socket.id, playerName.trim(), true));
+    rooms.set(code, room);
+    socket.join(code);
+    socket.data.roomCode = code;
+    socket.emit('room_created', { roomCode: code });
+    broadcastLobby(code);
+  });
+
+  socket.on('join_room', ({ playerName, roomCode }) => {
+    const code = (roomCode || '').trim().toUpperCase();
+    const room = rooms.get(code);
+    if (!room) return socket.emit('error', { message: 'Room not found. Check your code!' });
+    if (room.status !== 'lobby') return socket.emit('error', { message: 'Game is already in progress.' });
+    if (room.players.size >= 12) return socket.emit('error', { message: 'Room is full (max 12).' });
+    room.players.set(socket.id, makePlayer(socket.id, playerName.trim(), false));
+    socket.join(code);
+    socket.data.roomCode = code;
+    socket.emit('room_joined', { roomCode: code });
+    broadcastLobby(code);
+  });
+
+  socket.on('disconnect', () => {
+    const room = getRoom(socket);
+    if (!room) return;
+    room.players.delete(socket.id);
+    if (room.players.size === 0) {
+      clearTimeout(room.timer);
+      rooms.delete(room.code);
+      return;
+    }
+    // Pass host if host left
+    if (!room.players.has(room.hostId || '')) {
+      const next = room.players.values().next().value;
+      if (next) { next.isHost = true; room.hostId = next.id; }
+    }
+    broadcastLobby(room.code);
+  });
+
+  async function handleStartGame(socket, startAtRound = 1) {
+    const room = getRoom(socket);
+    if (!room || room.status !== 'lobby') return;
+    if (!room.players.get(socket.id)?.isHost) return;
+
+    room.status = 'loading';
+    io.to(room.code).emit('game_loading', {});
+
+    const history = loadHistory();
+    const usedEverSet = new Set(history.used || []);
+    const usedInGame = new Set();
+
+    for (let r = 1; r <= 3; r++) {
+      const pool = getPool(r);
+      const questions = buildQuestions(pool, 15, usedInGame, usedEverSet);
+      room.questions[r] = questions;
+      questions.forEach(q => usedInGame.add(q.name));
+
+      // Pre-resolve question images in parallel so clients get working URLs
+      const sport = ROUNDS[r - 1].sport;
+      await Promise.allSettled(questions.map(async q => {
+        const url = await resolveImageUrl(q.name, sport, q.wiki);
+        if (url) q._imageUrl = url;
+      }));
+
+      // Deep cut: prefer deepCut:true players, verify image works before committing
+      const remaining = pool.filter(p => !usedInGame.has(p.name)).sort(() => Math.random() - 0.5);
+      const deepCutPool = remaining.filter(p => p.deepCut === true);
+      const candidates = (deepCutPool.length > 0 ? deepCutPool : remaining).slice(0, 5);
+      let chosen = null;
+      for (const candidate of candidates) {
+        const imgUrl = await resolveImageUrl(candidate.name, sport, candidate.wiki);
+        if (imgUrl) {
+          chosen = { ...candidate, _imageUrl: imgUrl };
+          break;
+        }
+      }
+      // Last resort: pick first candidate even if image unresolved
+      room.deepCuts[r] = chosen || candidates[0] || null;
+      if (room.deepCuts[r]) usedInGame.add(room.deepCuts[r].name);
+    }
+
+    history.used = [...new Set([...usedEverSet, ...usedInGame])];
+    saveHistory(history);
+
+    startRound(room.code, Math.max(1, Math.min(3, startAtRound)));
+  }
+
+  socket.on('start_game',          () => handleStartGame(socket, 1));
+  socket.on('start_game_at_round', ({ round }) => handleStartGame(socket, round));
+
+  socket.on('submit_answer', ({ answer }) => {
+    const room = getRoom(socket);
+    if (!room) return;
+    const isDeepCut = room.status === 'deep_cut_question';
+    if (!['question', 'deep_cut_question'].includes(room.status)) return;
+    if (room.answers.has(socket.id)) return;
+
+    const q = isDeepCut
+      ? room.deepCuts[room.round]
+      : room.questions[room.round][room.questionIdx];
+    if (!q) return;
+
+    const elapsed = (Date.now() - room.questionStart) / 1000;
+    const correct = isCorrect(answer, q.name);
+
+    room.answers.set(socket.id, { answer: answer?.slice(0, 60), elapsed, correct });
+    socket.emit('answer_feedback', { correct, correctAnswer: correct ? q.name : null });
+    io.to(room.code).emit('player_answered', {
+      answeredCount: room.answers.size,
+      totalPlayers: room.players.size,
+    });
+
+    if (room.answers.size >= room.players.size) {
+      clearTimeout(room.timer);
+      if (isDeepCut) doDeepCutReveal(room.code);
+      else doReveal(room.code);
+    }
+  });
+
+  socket.on('submit_bet', ({ pct }) => {
+    const room = getRoom(socket);
+    if (!room || !room.bettingActive) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+
+    const validPcts = [0.05, 0.10, 0.15, 0.20, 0.25];
+    const safePct = validPcts.includes(Number(pct)) ? Number(pct) : 0;
+    const bet = Math.floor(player.score * safePct);
+    room.bets.set(socket.id, bet);
+    socket.emit('bet_confirmed', { amount: bet, pct: safePct });
+
+    if (room.bets.size >= room.players.size) {
+      clearTimeout(room.timer);
+      room.bettingActive = false;
+      io.to(room.code).emit('betting_end', {});
+      startDeepCutQuestion(room.code);
+    }
+  });
+
+  socket.on('pause_game', () => {
+    const room = getRoom(socket);
+    if (!room || room.paused) return;
+    if (!room.players.get(socket.id)?.isHost) return;
+    if (!['question', 'reveal', 'deep_cut_question'].includes(room.status)) return;
+
+    clearTimeout(room.timer);
+    const duration = room.status === 'reveal' ? 15000 : 30000;
+    const elapsed = Date.now() - room.phaseStart;
+    room.pauseRemaining = Math.max(1000, duration - elapsed);
+    room.paused = true;
+
+    io.to(room.code).emit('game_paused', { remainingSeconds: Math.ceil(room.pauseRemaining / 1000) });
+  });
+
+  socket.on('resume_game', () => {
+    const room = getRoom(socket);
+    if (!room || !room.paused) return;
+    if (!room.players.get(socket.id)?.isHost) return;
+    room.paused = false;
+    room.phaseStart = Date.now();
+
+    io.to(room.code).emit('game_resumed', {});
+
+    const remaining = room.pauseRemaining;
+    if (room.status === 'reveal') {
+      room.timer = setTimeout(() => {
+        room.questionIdx++;
+        if (room.questionIdx >= 15) doRoundEnd(room.code);
+        else startQuestion(room.code);
+      }, remaining);
+    } else {
+      room.timer = setTimeout(() => {
+        if (room.status === 'deep_cut_question') doDeepCutReveal(room.code);
+        else doReveal(room.code);
+      }, remaining);
+    }
+  });
+
+  socket.on('emoji_react', ({ emoji }) => {
+    const room = getRoom(socket);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    io.to(room.code).emit('emoji_reaction', { emoji, name: player.name });
+  });
+
+  socket.on('play_again', () => {
+    const room = getRoom(socket);
+    if (!room || room.status !== 'game_end') return;
+    if (!room.players.get(socket.id)?.isHost) return;
+    room.players.forEach(p => {
+      p.score = 0; p.roundScores = [0, 0, 0]; p.streak = 0;
+    });
+    room.questions = {}; room.deepCuts = {};
+    room.status = 'lobby';
+    broadcastLobby(room.code);
+  });
+});
+
+// ─────────────────────────────────────────────
+//  Debug endpoint
+// ─────────────────────────────────────────────
+app.get('/api/debug/pools', (req, res) => {
+  res.json({
+    basketball: basketballPlayers.length,
+    baseball: baseballPlayers.length,
+    football: footballPlayers.length,
+    history: (loadHistory().used || []).length,
+  });
+});
+
+// ─────────────────────────────────────────────
+//  Start
+// ─────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => console.log(`🏀  Name That Baller v2 running on http://localhost:${PORT}`));
+httpServer.listen(PORT, () => {
+  console.log(`🏀⚾🏈  Remember That Dude running on http://localhost:${PORT}`);
+  ROUNDS.forEach(r => console.log(`  ${r.icon} ${r.label}: ${r.players.length} players`));
+});
