@@ -882,6 +882,261 @@ html, body {
   to   { transform: scale(1);   opacity: 1; }
 }
 
+/* ── Power panel ── */
+.power-panel {
+  background: rgba(123,47,255,.08);
+  border: 2px solid rgba(123,47,255,.45);
+  border-radius: 5px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow-sm);
+}
+.power-panel-label {
+  font-family: 'Russo One', sans-serif;
+  font-size: 9px; text-transform: uppercase; letter-spacing: 2px;
+  color: #C09AFF; margin-bottom: 10px;
+}
+.power-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.power-btn {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 2px; padding: 8px 4px;
+  background: var(--card-bg2);
+  border: 2px solid rgba(123,47,255,.5);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: transform .08s, box-shadow .08s, border-color .1s;
+  box-shadow: 2px 2px 0 #000;
+  color: var(--text);
+}
+.power-btn:hover:not(:disabled) { border-color: var(--purple); }
+.power-btn:active:not(:disabled) { transform: translate(2px,2px); box-shadow: none; }
+.power-btn:disabled, .power-btn.power-btn-used {
+  opacity: .38; cursor: not-allowed; transform: none !important; box-shadow: 1px 1px 0 #000 !important;
+}
+.power-btn.power-btn-selected {
+  border-color: var(--yellow);
+  background: rgba(245,255,0,.08);
+  box-shadow: 0 0 8px rgba(245,255,0,.3), 2px 2px 0 #000;
+}
+.power-icon  { font-size: 20px; line-height: 1; }
+.power-label {
+  font-family: 'Russo One', sans-serif;
+  font-size: 10px; letter-spacing: 1px; color: #C09AFF;
+}
+.power-desc  { font-size: 9px; color: var(--text-dim); text-align: center; line-height: 1.3; }
+.power-target-picker {
+  border-top: 1px solid rgba(123,47,255,.3);
+  padding-top: 8px; margin-top: 2px;
+}
+.power-target-label {
+  font-family: 'Russo One', sans-serif;
+  font-size: 9px; letter-spacing: 2px; color: var(--yellow);
+  margin-bottom: 6px; text-transform: uppercase;
+}
+.power-target-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.power-target-chip {
+  background: rgba(0,0,0,.4);
+  border: 2px solid rgba(245,255,0,.4);
+  color: var(--yellow);
+  font-family: 'Russo One', sans-serif;
+  font-size: 11px; letter-spacing: .5px;
+  padding: 5px 10px; border-radius: 3px;
+  cursor: pointer;
+  box-shadow: 2px 2px 0 #000;
+  transition: transform .08s, border-color .1s;
+}
+.power-target-chip:hover  { border-color: var(--yellow); background: rgba(245,255,0,.1); }
+.power-target-chip:active { transform: translate(1px,1px); }
+.power-confirmed-msgs {
+  display: flex; flex-direction: column; gap: 4px; margin-top: 6px;
+}
+.power-confirmed-msg {
+  color: var(--green); font-size: 12px; font-weight: 800;
+  padding: 5px 8px;
+  background: rgba(0,255,136,.06);
+  border: 1px solid rgba(0,255,136,.25);
+  border-radius: 3px;
+}
+
+/* ── Freeze banner ── */
+.freeze-banner {
+  background: rgba(100,200,255,.12);
+  border-bottom: 2px solid rgba(100,200,255,.5);
+  color: #7DDAFF;
+  font-family: 'Russo One', sans-serif;
+  font-size: 14px; letter-spacing: 2px;
+  text-align: center; padding: 8px 16px;
+  flex-shrink: 0;
+  animation: popIn .2s ease;
+}
+
+/* ── Snitch display ── */
+.snitch-display {
+  background: rgba(0,0,0,.5);
+  border-bottom: 1px solid rgba(123,47,255,.5);
+  color: #C09AFF;
+  font-size: 12px; font-weight: 700;
+  padding: 5px 16px;
+  font-family: 'Nunito', sans-serif;
+  letter-spacing: .5px;
+  flex-shrink: 0;
+}
+
+/* ── Double Down badge ── */
+.double-down-badge {
+  font-family: 'Russo One', sans-serif;
+  font-size: 13px; letter-spacing: 1px;
+  color: #000;
+  background: var(--yellow);
+  padding: 2px 6px; border-radius: 3px;
+  box-shadow: 2px 2px 0 #000;
+  animation: popIn .3s ease;
+}
+.blocked-clue {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 18px 0; gap: 6px;
+}
+.blocked-ball {
+  font-size: 36px;
+  animation: blockBallSpin .7s linear infinite;
+}
+@keyframes blockBallSpin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+/* doubled-down indicator in scoreboard */
+.doubled-pts { color: var(--yellow); font-weight: 800; font-size: 12px; }
+.blocked-text {
+  font-family: 'Russo One', sans-serif;
+  font-size: 20px; letter-spacing: 3px;
+  color: var(--magenta);
+  text-shadow: 2px 2px 0 #000;
+}
+.block-overlay {
+  position: fixed; inset: 0; z-index: 1100;
+  background: rgba(0,0,0,.88);
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+  animation: blockOverlayAnim 2.4s ease forwards;
+}
+.block-overlay.hidden { display: none; }
+@keyframes blockOverlayAnim {
+  0%   { opacity: 0; transform: scale(.85); }
+  15%  { opacity: 1; transform: scale(1); }
+  78%  { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.05); }
+}
+.block-overlay-content { text-align: center; }
+.block-overlay-ball {
+  font-size: 72px;
+  display: block; margin-bottom: 8px;
+  animation: blockBallBounce .5s ease infinite alternate;
+}
+@keyframes blockBallBounce {
+  from { transform: translateY(-12px) rotate(-15deg); }
+  to   { transform: translateY(12px)  rotate(15deg); }
+}
+.block-overlay-title {
+  font-family: 'Russo One', sans-serif;
+  font-size: clamp(56px, 12vw, 88px);
+  color: var(--magenta);
+  text-shadow: 5px 5px 0 #000, 0 0 40px rgba(255,45,123,.7);
+  letter-spacing: 5px;
+  line-height: 1;
+}
+.block-overlay-detail {
+  font-family: 'Russo One', sans-serif;
+  font-size: 18px; color: var(--cream);
+  margin-top: 14px; letter-spacing: 2px;
+  text-shadow: 1px 1px 0 #000;
+}
+
+/* ── Video panel ── */
+.video-panel {
+  position: fixed;
+  bottom: 76px; right: 0;
+  width: 286px;
+  z-index: 950;
+  background: rgba(6,0,26,.93);
+  border-left: 2px solid var(--border);
+  border-top: 2px solid var(--border);
+  border-top-left-radius: 6px;
+  display: flex;
+  flex-direction: column-reverse;
+  max-height: 60vh;
+  box-shadow: -3px -3px 0 #000;
+}
+.video-panel.hidden { display: none; }
+.video-panel.collapsed .video-strip { display: none; }
+
+.vp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 6px;
+  background: rgba(0,0,0,.5);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.vp-label {
+  font-family: 'Russo One', sans-serif;
+  font-size: 10px; letter-spacing: 1px;
+  color: var(--teal);
+}
+.vp-controls { display: flex; gap: 3px; }
+.vp-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+  padding: 1px 4px;
+  cursor: pointer;
+  color: var(--text);
+  line-height: 1.4;
+}
+.vp-btn:hover { border-color: var(--teal); }
+
+.video-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  overflow-y: auto;
+}
+.video-tile {
+  position: relative;
+  width: 278px;
+  flex-shrink: 0;
+}
+.video-el {
+  display: block;
+  width: 278px;
+  height: 156px;
+  object-fit: cover;
+  border-radius: 3px;
+  background: #111;
+  border: 1px solid var(--border);
+}
+.local-vid { transform: scaleX(-1); }
+.video-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,.72);
+  color: var(--cream);
+  font-size: 10px; font-weight: 700;
+  padding: 2px 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  border-radius: 0 0 3px 3px;
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar        { width: 5px; }
 ::-webkit-scrollbar-track  { background: var(--bg); }

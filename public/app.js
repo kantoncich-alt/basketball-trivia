@@ -20,6 +20,15 @@ let qTimerInterval = null;
 let dcTimerInterval = null;
 let lastCountdownBeep = -1;
 let prefetchedImageUrl = null;  // Wikipedia image pre-fetched during sections 1+2
+let usedPowersThisRound = new Set();
+let usedDoubleDownGame  = false;
+let activePower         = null;
+let powerTargetId       = null;
+let myBlockedSections      = 0;
+let currentBlockedSections = 0;
+let isFrozen            = false;
+let doubleDownPending   = false;
+let powerPanelPlayers   = [];
 
 // ─── Audio ────────────────────────────────────────────────────────────────────
 let audioCtx = null;
@@ -254,6 +263,7 @@ socket.on('game_loading', () => showScreen('screen-loading'));
 
 // ─── Round Intro ──────────────────────────────────────────────────────────────
 socket.on('round_intro', ({ round, totalRounds, sport, label, icon }) => {
+  usedPowersThisRound = new Set();
   document.getElementById('ri-icon').textContent = icon;
   document.getElementById('ri-round-label').textContent = `ROUND ${round} OF ${totalRounds}`;
   document.getElementById('ri-name').textContent = label.toUpperCase();
@@ -305,8 +315,24 @@ socket.on('question_start', data => {
   streakEl.textContent = `🔥×${myStreak}`;
   document.getElementById('btn-pause').classList.toggle('hidden', !isHost);
 
+  // Hide power panel
+  document.getElementById('power-panel').style.display = 'none';
+
+  // Freeze / snitch / double-down UI
+  document.getElementById('freeze-banner').classList.toggle('hidden', !isFrozen);
+  document.getElementById('snitch-display').classList.add('hidden');
+  document.getElementById('double-down-badge').classList.toggle('hidden', !doubleDownPending);
+
+  // Apply blocks — consume and reset
+  currentBlockedSections = myBlockedSections;
+  myBlockedSections = 0;
+
   // Reset sections
-  document.getElementById('section1-content').textContent = data.synopsis || '…';
+  if (currentBlockedSections >= 1) {
+    document.getElementById('section1-content').innerHTML = blockedClueHtml();
+  } else {
+    document.getElementById('section1-content').textContent = data.synopsis || '…';
+  }
   document.getElementById('section1-wrap').classList.remove('hidden');
   document.getElementById('section2-wrap').classList.add('hidden');
   document.getElementById('section3-wrap').classList.add('hidden');
@@ -320,15 +346,21 @@ socket.on('question_start', data => {
   // Reset answer
   const input = document.getElementById('answer-input');
   input.value = '';
-  input.disabled = false;
-  document.getElementById('btn-submit-answer').disabled = false;
+  input.disabled = isFrozen;
+  document.getElementById('btn-submit-answer').disabled = isFrozen;
   document.getElementById('answer-result-banner').classList.add('hidden');
   document.getElementById('answered-bar').innerHTML = '';
 
   lastCountdownBeep = -1;
   startQuestionTimer(30);
   showScreen('screen-question');
-  setTimeout(() => input.focus(), 200);
+  if (currentBlockedSections > 0) {
+    const detail = currentBlockedSections >= 3 ? 'All clues blocked — good luck!'
+      : currentBlockedSections === 2 ? '2 clues blocked — photo only!'
+      : '1st clue blocked — wait for Clue 2!';
+    showPowerOverlay('🏀', 'BLOCKED!', detail);
+  }
+  if (!isFrozen) setTimeout(() => input.focus(), 200);
 });
 
 function startQuestionTimer(totalSecs) {
@@ -375,6 +407,15 @@ function revealSection2() {
   const d = questionData;
   if (!d) return;
   playReveal();
+
+  if (currentBlockedSections >= 2) {
+    document.getElementById('section2-content').innerHTML = blockedClueHtml();
+    document.getElementById('section2-wrap').classList.remove('hidden');
+    document.getElementById('sm-1').classList.remove('active');
+    document.getElementById('sm-1').classList.add('done');
+    document.getElementById('sm-2').classList.add('active');
+    return;
+  }
 
   const content = document.getElementById('section2-content');
   let html = '';
@@ -424,6 +465,15 @@ function revealSection3() {
   if (!d) return;
   playReveal();
 
+  if (currentBlockedSections >= 3) {
+    document.getElementById('player-image-container').innerHTML = blockedClueHtml();
+    document.getElementById('section3-wrap').classList.remove('hidden');
+    document.getElementById('sm-2').classList.remove('active');
+    document.getElementById('sm-2').classList.add('done');
+    document.getElementById('sm-3').classList.add('active');
+    return;
+  }
+
   // Update hangman with first letters
   const hangmanEl = document.getElementById('q-hangman');
   if (hangmanEl) hangmanEl.innerHTML = buildHangman(d.nameLengths, d.nameFirstLetters, true);
@@ -443,6 +493,9 @@ function revealSection3() {
 // Answer submission
 document.getElementById('btn-submit-answer').addEventListener('click', submitAnswer);
 document.getElementById('answer-input').addEventListener('keydown', e => { if (e.key === 'Enter') submitAnswer(); });
+document.getElementById('answer-input').addEventListener('input', e => {
+  socket.emit('snitch_typing', { text: e.target.value });
+});
 
 function submitAnswer() {
   if (answered) return;
@@ -466,6 +519,10 @@ socket.on('player_answered', ({ answeredCount, totalPlayers }) => {
 // ─── Answer Reveal ────────────────────────────────────────────────────────────
 socket.on('answer_reveal', ({ correctAnswer, funFact, imageUrl, wikiTitle, playerResults }) => {
   clearInterval(qTimerInterval);
+  isFrozen = false;
+  doubleDownPending = false;
+  document.getElementById('freeze-banner').classList.add('hidden');
+  document.getElementById('double-down-badge').classList.add('hidden');
 
   const me = playerResults.find(p => p.name === myName);
   if (me) { myScore = me.totalScore; myStreak = me.streak || 0; }
@@ -484,7 +541,8 @@ socket.on('answer_reveal', ({ correctAnswer, funFact, imageUrl, wikiTitle, playe
       : p.answer
         ? `<span class="ans-wrong">${esc(p.answer)}</span>`
         : '<span class="ans-none">—</span>';
-    const ptsHtml = p.points > 0 ? `<span class="pts-gained">+${p.points}</span>` : '';
+    const ddTag = p.doubledDown ? ' <span class="doubled-pts">×2</span>' : '';
+    const ptsHtml = p.points > 0 ? `<span class="pts-gained">+${p.points}${ddTag}</span>` : '';
     return `<div class="sb-row ${p.name === myName ? 'me' : ''}">
       <span class="sb-pos">${medal}</span>
       <span class="sb-name">${esc(p.name)}</span>
@@ -685,6 +743,7 @@ socket.on('answer_feedback', ({ correct }) => {
 // ─── Deep Cut Reveal ──────────────────────────────────────────────────────────
 socket.on('deep_cut_reveal', ({ correctAnswer, funFact, imageUrl, wikiTitle, playerResults }) => {
   clearInterval(dcTimerInterval);
+  document.getElementById('power-panel').style.display = 'none';
 
   const me = playerResults.find(p => p.name === myName);
   if (me) myScore = me.totalScore;
@@ -776,6 +835,152 @@ socket.on('game_resumed', () => {
 
 function pauseGame()  { socket.emit('pause_game'); }
 function resumeGame() { socket.emit('resume_game'); }
+
+// ─── Power system ─────────────────────────────────────────────────────────────
+socket.on('power_window_open', ({ leaderId, leaderName, players }) => {
+  activePower = null;
+  powerTargetId = null;
+  powerPanelPlayers = players;
+  renderPowerPanel({ leaderId, leaderName, players });
+});
+
+socket.on('power_confirmed', ({ power, targetName }) => {
+  usedPowersThisRound.add(power);
+  if (power === 'doubledown') { usedDoubleDownGame = true; doubleDownPending = true; }
+
+  const labels = {
+    block: '🏀 Block placed on leader!',
+    freeze: `❄️ Freeze set on ${targetName || '?'}!`,
+    shield: '🛡️ Shield up for next question!',
+    snitch: `👁 Snitching on ${targetName || '?'}!`,
+    doubledown: '×2 Double Down locked in!',
+  };
+  const msgs = document.getElementById('power-confirmed-msgs');
+  if (msgs) {
+    const div = document.createElement('div');
+    div.className = 'power-confirmed-msg';
+    div.textContent = '✅ ' + (labels[power] || power);
+    msgs.appendChild(div);
+  }
+  // Disable that button and hide target picker
+  const btn = document.getElementById('pbtn-' + power);
+  if (btn) { btn.disabled = true; btn.classList.add('power-btn-used'); btn.classList.remove('power-btn-selected'); }
+  document.getElementById('power-target-picker').style.display = 'none';
+  activePower = null;
+});
+
+socket.on('you_are_frozen', () => {
+  isFrozen = true;
+  showToast('❄️ You are FROZEN next question — no answers!', 4000);
+});
+
+socket.on('shield_activated', () => {
+  showToast('🛡️ Your Shield blocked an incoming attack!', 3500);
+});
+
+socket.on('snitch_update', ({ targetName, text }) => {
+  const el = document.getElementById('snitch-display');
+  if (!el) return;
+  el.classList.remove('hidden');
+  el.textContent = `👁 ${targetName}: ${text || '(typing…)'}`;
+});
+
+socket.on('block_reveal', ({ blockCount, leaderName, leaderId }) => {
+  if (socket.id === leaderId) {
+    myBlockedSections = blockCount;
+    const detail = blockCount >= 3 ? 'All clues blocked — good luck!' : blockCount === 2 ? '2 clues blocked — photo only!' : '1st clue blocked — wait for Clue 2!';
+    showPowerOverlay('🏀', 'BLOCKED!', detail);
+  } else {
+    const blasts = ['🏀','🏀🏀','🏀🏀🏀'][blockCount - 1] || '🏀';
+    const msg = blockCount >= 3 ? `${blasts} ${leaderName} is FULLY BLOCKED!` : `${blasts} ${blockCount} block${blockCount > 1 ? 's' : ''} on ${leaderName}!`;
+    showToast(msg, 3500);
+  }
+});
+
+function renderPowerPanel({ leaderId, leaderName, players }) {
+  const panel = document.getElementById('power-panel');
+  if (!panel) return;
+
+  const myId = socket.id;
+  const isLeader = (myId === leaderId);
+  const hasLeader = !!leaderId;
+  const others = players.filter(p => p.id !== myId);
+
+  const powers = [
+    { id: 'block',      icon: '🏀', label: 'Block',       desc: leaderName ? `Block ${leaderName}` : 'No leader',
+      disabled: isLeader || !hasLeader || usedPowersThisRound.has('block'),
+      usedMsg: isLeader ? 'You are the leader' : !hasLeader ? 'No clear leader' : 'Used this round', needsTarget: false },
+    { id: 'freeze',     icon: '❄️', label: 'Freeze',      desc: 'Freeze a player',
+      disabled: usedPowersThisRound.has('freeze') || others.length === 0,
+      usedMsg: 'Used this round', needsTarget: true },
+    { id: 'shield',     icon: '🛡️', label: 'Shield',     desc: 'Protect yourself',
+      disabled: usedPowersThisRound.has('shield'),
+      usedMsg: 'Used this round', needsTarget: false },
+    { id: 'snitch',     icon: '👁', label: 'Snitch',      desc: "Watch someone's typing",
+      disabled: usedPowersThisRound.has('snitch') || others.length === 0,
+      usedMsg: 'Used this round', needsTarget: true },
+    { id: 'doubledown', icon: '×2', label: 'Double Down', desc: '2× points if correct',
+      disabled: usedDoubleDownGame,
+      usedMsg: 'Used this game', needsTarget: false },
+  ];
+
+  const grid = document.getElementById('power-grid');
+  grid.innerHTML = powers.map(pw => `
+    <button class="power-btn${pw.disabled ? ' power-btn-used' : ''}" id="pbtn-${pw.id}"
+      onclick="${pw.disabled ? '' : pw.needsTarget ? `selectPower('${pw.id}')` : `usePowerDirect('${pw.id}')`}"
+      ${pw.disabled ? 'disabled' : ''} title="${pw.disabled ? pw.usedMsg : pw.desc}">
+      <span class="power-icon">${pw.icon}</span>
+      <span class="power-label">${pw.label}</span>
+      <span class="power-desc">${pw.disabled ? pw.usedMsg : pw.desc}</span>
+    </button>
+  `).join('');
+
+  document.getElementById('power-target-picker').style.display = 'none';
+  document.getElementById('power-confirmed-msgs').innerHTML = '';
+  panel.style.display = 'block';
+}
+
+function selectPower(powerName) {
+  activePower = powerName;
+  document.querySelectorAll('.power-btn').forEach(b => b.classList.remove('power-btn-selected'));
+  const btn = document.getElementById('pbtn-' + powerName);
+  if (btn) btn.classList.add('power-btn-selected');
+
+  const others = powerPanelPlayers.filter(p => p.id !== socket.id);
+  const chips = document.getElementById('power-target-chips');
+  chips.innerHTML = others.map(p =>
+    `<button class="power-target-chip" onclick="confirmPowerTarget('${p.id}','${esc(p.name)}')">${esc(p.name)}</button>`
+  ).join('');
+  document.getElementById('power-target-picker').style.display = 'block';
+}
+
+function usePowerDirect(powerName) {
+  socket.emit('use_power', { power: powerName, targetId: null });
+  const btn = document.getElementById('pbtn-' + powerName);
+  if (btn) { btn.disabled = true; btn.classList.add('power-btn-used'); }
+}
+
+function confirmPowerTarget(targetId, targetName) {
+  if (!activePower) return;
+  socket.emit('use_power', { power: activePower, targetId });
+  const btn = document.getElementById('pbtn-' + activePower);
+  if (btn) { btn.disabled = true; btn.classList.add('power-btn-used'); btn.classList.remove('power-btn-selected'); }
+  document.getElementById('power-target-picker').style.display = 'none';
+  activePower = null;
+}
+
+function blockedClueHtml() {
+  return '<div class="blocked-clue"><span class="blocked-ball">🏀</span><span class="blocked-text">BLOCKED</span></div>';
+}
+
+function showPowerOverlay(icon, title, detail) {
+  document.getElementById('block-overlay-icon').textContent = icon;
+  document.getElementById('block-overlay-title').textContent = title;
+  document.getElementById('block-overlay-detail').textContent = detail;
+  const overlay = document.getElementById('block-overlay');
+  overlay.classList.remove('hidden');
+  setTimeout(() => overlay.classList.add('hidden'), 2400);
+}
 
 // ─── Errors ───────────────────────────────────────────────────────────────────
 socket.on('error', ({ message }) => showToast(message, 3500));

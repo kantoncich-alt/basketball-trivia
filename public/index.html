@@ -120,6 +120,7 @@
       <span id="timer-text" class="timer-text">30</span>
     </div>
     <div class="q-right-info">
+      <span id="double-down-badge" class="double-down-badge hidden">×2</span>
       <span id="q-score" class="q-score-val">0</span>
       <span id="q-streak" class="q-streak" style="display:none">🔥×1</span>
       <button id="btn-pause" class="btn-pause hidden" onclick="pauseGame()" title="Pause">⏸</button>
@@ -144,6 +145,8 @@
   </div>
 
   <div id="answered-bar" class="answered-bar"></div>
+  <div id="freeze-banner" class="freeze-banner hidden">❄️ FROZEN — you cannot answer this question!</div>
+  <div id="snitch-display" class="snitch-display hidden"></div>
 
   <div class="question-body">
     <!-- Section 1: Synopsis -->
@@ -183,6 +186,15 @@
       <div id="reveal-image-wrap" class="reveal-image-wrap"></div>
       <div id="reveal-player-info" class="reveal-player-info"></div>
       <div id="reveal-fun-fact" class="reveal-fun-fact"></div>
+      <div id="power-panel" class="power-panel" style="display:none">
+        <div class="power-panel-label">⚡ POWER PLAY — NEXT QUESTION</div>
+        <div id="power-grid" class="power-grid"></div>
+        <div id="power-target-picker" class="power-target-picker" style="display:none">
+          <div class="power-target-label">Select target:</div>
+          <div id="power-target-chips" class="power-target-chips"></div>
+        </div>
+        <div id="power-confirmed-msgs" class="power-confirmed-msgs"></div>
+      </div>
     </div>
     <div class="reveal-right">
       <h3 class="scoreboard-title">SCOREBOARD</h3>
@@ -315,8 +327,31 @@
   </div>
 </div>
 
+<!-- ── POWER ANIMATION OVERLAY ── -->
+<div id="block-overlay" class="block-overlay hidden">
+  <div class="block-overlay-content">
+    <div id="block-overlay-icon" class="block-overlay-ball">🏀</div>
+    <div id="block-overlay-title" class="block-overlay-title">BLOCKED!</div>
+    <div id="block-overlay-detail" class="block-overlay-detail"></div>
+  </div>
+</div>
+
+<!-- ── VIDEO PANEL ── -->
+<div id="video-panel" class="video-panel hidden">
+  <div class="vp-header">
+    <span class="vp-label">📹 LIVE</span>
+    <div class="vp-controls">
+      <button class="vp-btn" id="btn-mic" onclick="toggleMic()" title="Mute mic">🎤</button>
+      <button class="vp-btn" id="btn-cam" onclick="toggleCam()" title="Camera off">📷</button>
+      <button class="vp-btn" id="btn-vp-toggle" onclick="toggleVideoPanel()" title="Collapse">−</button>
+    </div>
+  </div>
+  <div id="video-strip" class="video-strip"></div>
+</div>
+
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
 <script src="app.js"></script>
+<script src="webrtc.js"></script>
 </body>
 </html>

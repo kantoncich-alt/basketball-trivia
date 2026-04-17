@@ -256,6 +256,19 @@ function makeRoom(code) {
     bettingActive: false,
     timer: null, phaseStart: 0, questionStart: 0,
     paused: false, pauseRemaining: 0,
+    readyPeers: new Set(),
+    // Powers
+    blockingOpen: false,
+    pendingBlocks: new Set(),
+    pendingFreezes: new Map(),     // targetId -> attackerId
+    pendingShields: new Set(),
+    pendingSnitches: new Map(),    // snitcherId -> targetId
+    pendingDoubleDowns: new Set(),
+    frozenPlayers: new Set(),      // active during current question
+    activeSnitches: new Map(),     // snitcherId -> targetId during question
+    activeDoubleDowns: new Set(),  // active during current question
+    usedPowersRound: new Map(),    // socketId -> Set<powerName>
+    usedDoubleDownGame: new Set(), // socketId (once per game)
   };
 }
 
@@ -279,6 +292,16 @@ function startRound(code, round) {
   room.round = round;
   room.questionIdx = 0;
   room.status = 'round_intro';
+  room.blockingOpen = false;
+  room.pendingBlocks = new Set();
+  room.pendingFreezes = new Map();
+  room.pendingShields = new Set();
+  room.pendingSnitches = new Map();
+  room.pendingDoubleDowns = new Set();
+  room.frozenPlayers = new Set();
+  room.activeSnitches = new Map();
+  room.activeDoubleDowns = new Set();
+  room.usedPowersRound = new Map();
   clearTimeout(room.timer);
 
   const { sport, label, icon } = ROUNDS[round - 1];
@@ -313,6 +336,12 @@ function questionPayload(room) {
   };
 }
 
+function getLeader(room) {
+  const sorted = [...room.players.values()].sort((a, b) => b.score - a.score);
+  if (sorted.length < 2) return null;
+  return sorted[0].score > sorted[1].score ? sorted[0] : null;
+}
+
 function startQuestion(code) {
   const room = rooms.get(code);
   if (!room) return;
@@ -322,6 +351,43 @@ function startQuestion(code) {
   room.answers = new Map();
   room.questionStart = Date.now();
   room.phaseStart = Date.now();
+  room.blockingOpen = false;
+
+  const leader = getLeader(room);
+
+  // 1. Shields: cancel blocks/freezes targeting shielded players
+  room.pendingShields.forEach(shieldId => {
+    if (leader && leader.id === shieldId) room.pendingBlocks.clear();
+    room.pendingFreezes.delete(shieldId);
+    io.to(shieldId).emit('shield_activated');
+  });
+  room.pendingShields = new Set();
+
+  // 2. Blocks: resolve clue suppression on leader
+  const blockCount = Math.min(room.pendingBlocks.size, 3);
+  if (blockCount > 0 && leader) {
+    io.to(code).emit('block_reveal', { blockCount, leaderName: leader.name, leaderId: leader.id });
+  }
+  room.pendingBlocks = new Set();
+
+  // 3. Freezes: notify targets
+  room.frozenPlayers = new Set();
+  room.pendingFreezes.forEach((attackerId, targetId) => {
+    room.frozenPlayers.add(targetId);
+    io.to(targetId).emit('you_are_frozen');
+  });
+  room.pendingFreezes = new Map();
+
+  // 4. Snitches: activate for this question
+  room.activeSnitches = new Map();
+  room.pendingSnitches.forEach((targetId, snitcherId) => {
+    room.activeSnitches.set(snitcherId, targetId);
+  });
+  room.pendingSnitches = new Map();
+
+  // 5. Double Downs: activate for this question
+  room.activeDoubleDowns = new Set(room.pendingDoubleDowns);
+  room.pendingDoubleDowns = new Set();
 
   io.to(code).emit('question_start', questionPayload(room));
   room.timer = setTimeout(() => doReveal(code), 30000); // 3 × 10s
@@ -339,10 +405,12 @@ function doReveal(code) {
 
   room.players.forEach((player, id) => {
     const ans = room.answers.get(id);
+    const isDoubleDown = room.activeDoubleDowns.has(id);
     let points = 0;
     if (ans?.correct) {
       player.streak++;
       points = calcScore(ans.elapsed, player.streak);
+      if (isDoubleDown) points *= 2;
     } else {
       player.streak = 0;
     }
@@ -355,8 +423,10 @@ function doReveal(code) {
       points, totalScore: player.score, streak: player.streak,
       elapsed: ans ? Math.round(ans.elapsed * 10) / 10 : null,
       section: ans ? (ans.elapsed < 10 ? 1 : ans.elapsed < 20 ? 2 : 3) : null,
+      doubledDown: isDoubleDown && (ans?.correct || false),
     });
   });
+  room.activeDoubleDowns = new Set();
 
   playerResults.sort((a, b) => b.totalScore - a.totalScore);
 
@@ -367,6 +437,23 @@ function doReveal(code) {
     wikiTitle: q.wiki || null,
     playerResults,
   });
+
+  // Open power window for the next question (not after the last question)
+  if (room.questionIdx < 14) {
+    const powerLeader = getLeader(room);
+    room.blockingOpen = true;
+    room.pendingBlocks = new Set();
+    room.pendingFreezes = new Map();
+    room.pendingShields = new Set();
+    room.pendingSnitches = new Map();
+    room.pendingDoubleDowns = new Set();
+    const players = [...room.players.values()].map(p => ({ id: p.id, name: p.name }));
+    io.to(code).emit('power_window_open', {
+      leaderId: powerLeader?.id || null,
+      leaderName: powerLeader?.name || null,
+      players,
+    });
+  }
 
   room.timer = setTimeout(() => {
     room.questionIdx++;
@@ -530,6 +617,19 @@ io.on('connection', socket => {
   socket.on('disconnect', () => {
     const room = getRoom(socket);
     if (!room) return;
+    room.readyPeers.delete(socket.id);
+    room.pendingBlocks.delete(socket.id);
+    room.pendingShields.delete(socket.id);
+    room.pendingDoubleDowns.delete(socket.id);
+    room.frozenPlayers.delete(socket.id);
+    room.activeDoubleDowns.delete(socket.id);
+    room.usedPowersRound.delete(socket.id);
+    room.usedDoubleDownGame.delete(socket.id);
+    room.pendingFreezes.delete(socket.id);
+    room.pendingFreezes.forEach((attackerId, targetId) => { if (attackerId === socket.id) room.pendingFreezes.delete(targetId); });
+    room.activeSnitches.delete(socket.id);
+    room.pendingSnitches.delete(socket.id);
+    room.pendingSnitches.forEach((targetId, snitcherId) => { if (targetId === socket.id) room.pendingSnitches.delete(snitcherId); });
     room.players.delete(socket.id);
     if (room.players.size === 0) {
       clearTimeout(room.timer);
@@ -601,6 +701,7 @@ io.on('connection', socket => {
     const isDeepCut = room.status === 'deep_cut_question';
     if (!['question', 'deep_cut_question'].includes(room.status)) return;
     if (room.answers.has(socket.id)) return;
+    if (room.frozenPlayers.has(socket.id)) return;
 
     const q = isDeepCut
       ? room.deepCuts[room.round]
@@ -683,6 +784,89 @@ io.on('connection', socket => {
     }
   });
 
+  // ── Power system ──────────────────────────────────────────────────────────
+  socket.on('use_power', ({ power, targetId }) => {
+    const room = getRoom(socket);
+    if (!room || !room.blockingOpen) return;
+
+    const used = room.usedPowersRound.get(socket.id) || new Set();
+    if (power === 'doubledown') {
+      if (room.usedDoubleDownGame.has(socket.id)) return;
+    } else {
+      if (used.has(power)) return;
+    }
+
+    const leader = getLeader(room);
+    let targetName = null;
+
+    switch (power) {
+      case 'block':
+        if (!leader || socket.id === leader.id) return;
+        room.pendingBlocks.add(socket.id);
+        break;
+      case 'freeze':
+        if (!targetId || socket.id === targetId || !room.players.has(targetId)) return;
+        if (room.pendingFreezes.has(targetId)) return;
+        room.pendingFreezes.set(targetId, socket.id);
+        targetName = room.players.get(targetId).name;
+        break;
+      case 'shield':
+        room.pendingShields.add(socket.id);
+        break;
+      case 'snitch':
+        if (!targetId || socket.id === targetId || !room.players.has(targetId)) return;
+        room.pendingSnitches.set(socket.id, targetId);
+        targetName = room.players.get(targetId).name;
+        break;
+      case 'doubledown':
+        room.pendingDoubleDowns.add(socket.id);
+        room.usedDoubleDownGame.add(socket.id);
+        break;
+      default:
+        return;
+    }
+
+    used.add(power);
+    room.usedPowersRound.set(socket.id, used);
+    socket.emit('power_confirmed', { power, targetName });
+  });
+
+  socket.on('snitch_typing', ({ text }) => {
+    const room = getRoom(socket);
+    if (!room || room.status !== 'question') return;
+    room.activeSnitches.forEach((targetId, snitcherId) => {
+      if (targetId === socket.id) {
+        const player = room.players.get(socket.id);
+        io.to(snitcherId).emit('snitch_update', {
+          targetName: player?.name || '?',
+          text: (text || '').slice(0, 60),
+        });
+      }
+    });
+  });
+
+  // ── WebRTC signaling relay ─────────────────────────────────────────────────
+  socket.on('rtc_ready', () => {
+    const room = getRoom(socket);
+    if (!room) return;
+    const existing = [...room.readyPeers];
+    socket.emit('rtc_existing_peers', { peers: existing });
+    socket.to(room.code).emit('rtc_peer_ready', { peerId: socket.id });
+    room.readyPeers.add(socket.id);
+  });
+
+  socket.on('rtc_offer', ({ to, offer }) => {
+    io.to(to).emit('rtc_offer', { from: socket.id, offer });
+  });
+
+  socket.on('rtc_answer', ({ to, answer }) => {
+    io.to(to).emit('rtc_answer', { from: socket.id, answer });
+  });
+
+  socket.on('rtc_ice', ({ to, candidate }) => {
+    io.to(to).emit('rtc_ice', { from: socket.id, candidate });
+  });
+
   socket.on('emoji_react', ({ emoji }) => {
     const room = getRoom(socket);
     if (!room) return;
@@ -699,6 +883,17 @@ io.on('connection', socket => {
       p.score = 0; p.roundScores = [0, 0, 0]; p.streak = 0;
     });
     room.questions = {}; room.deepCuts = {};
+    room.blockingOpen = false;
+    room.pendingBlocks = new Set();
+    room.pendingFreezes = new Map();
+    room.pendingShields = new Set();
+    room.pendingSnitches = new Map();
+    room.pendingDoubleDowns = new Set();
+    room.frozenPlayers = new Set();
+    room.activeSnitches = new Map();
+    room.activeDoubleDowns = new Set();
+    room.usedPowersRound = new Map();
+    room.usedDoubleDownGame = new Set();
     room.status = 'lobby';
     broadcastLobby(room.code);
   });
